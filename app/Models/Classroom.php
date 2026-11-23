@@ -1,0 +1,264 @@
+<?php
+
+namespace App\Models;
+
+use Illuminate\Database\Eloquent\Factories\HasFactory;
+use Illuminate\Database\Eloquent\Model;
+use Illuminate\Database\Eloquent\Relations\BelongsTo;
+use Illuminate\Database\Eloquent\Relations\BelongsToMany;
+use Illuminate\Database\Eloquent\Relations\HasMany;
+use Illuminate\Support\Str;
+
+class Classroom extends Model
+{
+    use HasFactory;
+
+    protected $fillable = [
+        'user_id',
+        'name',
+        'description',
+        'banner_image_path',
+        'code',
+        'is_email_restricted',
+        'allowed_email_domain',
+    ];
+
+    protected function casts(): array
+    {
+        return [
+            'is_email_restricted' => 'boolean',
+        ];
+    }
+
+    /**
+     * Teacher who owns the classroom.
+     */
+    public function teacher(): BelongsTo
+    {
+        return $this->belongsTo(User::class, 'user_id');
+    }
+
+    /**
+     * Enrolled students in the classroom.
+     */
+    public function students(): BelongsToMany
+    {
+        return $this->belongsToMany(User::class, 'classroom_student')
+            ->withTimestamps();
+    }
+
+    /**
+     * Tests assigned to this classroom.
+     */
+    public function tests(): BelongsToMany
+    {
+        return $this->belongsToMany(Test::class, 'classroom_test')
+            ->withPivot(['id', 'starts_at', 'due_at', 'allow_late_submissions', 'is_active'])
+            ->withTimestamps();
+    }
+
+    /**
+     * Classroom test assignments pivot records.
+     */
+    public function classroomTests(): HasMany
+    {
+        return $this->hasMany(ClassroomTest::class);
+    }
+
+    /**
+     * Exam attempts conducted in this classroom.
+     */
+    public function attempts(): HasMany
+    {
+        return $this->hasMany(ExamAttempt::class);
+    }
+
+    /**
+     * Check if a specific student is enrolled in this classroom.
+     */
+    public function hasStudent(int|string $userId): bool
+    {
+        return $this->students()->where('users.id', $userId)->exists();
+    }
+
+    /**
+     * Check if a test is assigned to this classroom.
+     */
+    public function hasTest(int|string $testId): bool
+    {
+        return $this->tests()->where('tests.id', $testId)->exists();
+    }
+
+    /**
+     * Join requests submitted for this classroom.
+     */
+    public function joinRequests(): HasMany
+    {
+        return $this->hasMany(ClassroomJoinRequest::class);
+    }
+
+    public const DEFAULT_BANNERS = [
+        'images/banners/math.svg',
+        'images/banners/science.svg',
+        'images/banners/technology.svg',
+        'images/banners/books.svg',
+        'images/banners/education.svg',
+        'images/banners/abstract.svg',
+    ];
+
+    /**
+     * Pick a random default academic banner path.
+     */
+    public static function getRandomDefaultBanner(): string
+    {
+        return self::DEFAULT_BANNERS[array_rand(self::DEFAULT_BANNERS)];
+    }
+
+    /**
+     * Learning materials uploaded for this classroom.
+     */
+    public function materials(): HasMany
+    {
+        return $this->hasMany(ClassroomMaterial::class)->latest();
+    }
+
+    /**
+     * Discussion posts / announcements in this classroom.
+     */
+    public function posts(): HasMany
+    {
+        return $this->hasMany(ClassroomPost::class)->latest();
+    }
+
+    /**
+     * Full URL for custom banner image if set and exists.
+     */
+    public function bannerUrl(): ?string
+    {
+        if (!$this->banner_image_path) {
+            return null;
+        }
+
+        // 1. Direct public asset (e.g. images/banners/*.svg)
+        if (str_starts_with($this->banner_image_path, 'images/')) {
+            return asset($this->banner_image_path);
+        }
+
+        // 2. Public storage path (e.g. classroom_banners/...)
+        if (\Illuminate\Support\Facades\Storage::disk('public')->exists($this->banner_image_path)) {
+            return asset('storage/' . $this->banner_image_path);
+        }
+
+        // 3. Fallback to public folder path if file exists
+        if (file_exists(public_path($this->banner_image_path))) {
+            return asset($this->banner_image_path);
+        }
+
+        return null;
+    }
+
+    /**
+     * Deterministic warm cohesive color palette for fallback banner rendering.
+     */
+    public function bannerTheme(): array
+    {
+        $palettes = [
+            [
+                'name' => 'sage',
+                'bg' => 'bg-emerald-800 text-emerald-50',
+                'accent' => 'bg-emerald-700/60',
+                'badge' => 'bg-emerald-950/60 text-emerald-200 border-emerald-400/30',
+                'chip' => 'bg-emerald-700 text-emerald-100',
+            ],
+            [
+                'name' => 'terracotta',
+                'bg' => 'bg-amber-900 text-amber-50',
+                'accent' => 'bg-amber-800/60',
+                'badge' => 'bg-amber-950/60 text-amber-200 border-amber-400/30',
+                'chip' => 'bg-amber-700 text-amber-100',
+            ],
+            [
+                'name' => 'lavender',
+                'bg' => 'bg-purple-900 text-purple-50',
+                'accent' => 'bg-purple-800/60',
+                'badge' => 'bg-purple-950/60 text-purple-200 border-purple-400/30',
+                'chip' => 'bg-purple-700 text-purple-100',
+            ],
+            [
+                'name' => 'warm-stone',
+                'bg' => 'bg-stone-800 text-stone-50',
+                'accent' => 'bg-stone-700/60',
+                'badge' => 'bg-stone-900/60 text-stone-200 border-stone-400/30',
+                'chip' => 'bg-stone-700 text-stone-100',
+            ],
+            [
+                'name' => 'teal-earth',
+                'bg' => 'bg-teal-900 text-teal-50',
+                'accent' => 'bg-teal-800/60',
+                'badge' => 'bg-teal-950/60 text-teal-200 border-teal-400/30',
+                'chip' => 'bg-teal-700 text-teal-100',
+            ],
+        ];
+
+        $idx = abs(crc32($this->id . $this->name)) % count($palettes);
+        return $palettes[$idx];
+    }
+
+    /**
+     * Validate whether an email address satisfies the classroom's domain restriction.
+     * Enforces strict, exact domain matching (no substring or unsafe wildcard matches).
+     */
+    public function isEmailAllowed(?string $email): bool
+    {
+        if (!$this->is_email_restricted || empty($this->allowed_email_domain)) {
+            return true;
+        }
+
+        if (empty($email) || !filter_var($email, FILTER_VALIDATE_EMAIL)) {
+            return false;
+        }
+
+        $email = strtolower(trim($email));
+        $emailParts = explode('@', $email);
+        if (count($emailParts) !== 2) {
+            return false;
+        }
+        $studentDomain = $emailParts[1];
+
+        // Parse allowed format(s) split by comma or semicolon
+        $allowedTokens = array_filter(array_map('trim', preg_split('/[,;]+/', strtolower($this->allowed_email_domain))));
+
+        foreach ($allowedTokens as $token) {
+            // Case 1: Specific full email address restriction (e.g. "specific.user@college.edu")
+            if (str_contains($token, '@') && !str_starts_with($token, '@')) {
+                if ($email === $token) {
+                    return true;
+                }
+                continue;
+            }
+
+            // Case 2: Domain restriction (e.g. "@college.edu" or "college.edu")
+            $targetDomain = ltrim($token, '@');
+            $targetDomain = trim($targetDomain);
+
+            // Strict exact domain equality check (prevents fakecollege.edu, college.edu.attacker.com, etc.)
+            if ($studentDomain === $targetDomain) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /**
+     * Generate a unique uppercase join code (e.g. 7 characters).
+     */
+    public static function generateUniqueCode(): string
+    {
+        do {
+            $code = strtoupper(Str::random(7));
+        } while (static::where('code', $code)->exists());
+
+        return $code;
+    }
+}

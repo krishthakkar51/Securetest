@@ -1,0 +1,800 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+    <title>SecureTest</title>
+
+    <meta name="csrf-token" content="{{ csrf_token() }}">
+    <meta name="auth-check" content="1">
+
+    @vite(['resources/css/app.css', 'resources/js/app.js'])
+    <script src="{{ asset('js/proctoring_tracker.js') }}"></script>
+</head>
+
+<body>
+
+    <div id="examContent">
+
+        <h1>SecureTest</h1>
+
+        <p>Test Page</p>
+
+        <p id="status">
+            You are currently on the test page.
+        </p>
+
+        <!-- Webcam -->
+        <video
+            id="webcam"
+            width="400"
+            autoplay
+            playsinline
+            muted
+        ></video>
+
+        <p id="cameraStatus">
+            Camera is not started.
+        </p>
+        <p id="faceStatus">
+        Face detection is not started.
+        </p>
+<p id="gazeStatus">
+    Eye Gaze: Waiting...
+</p>
+        <p id="score">
+            Suspicion Score: 0
+        </p>
+
+        <!-- Start Test -->
+        <button id="startTest">
+            Start Test
+        </button>
+
+        <!-- Temporary input for testing copy/paste -->
+        <input
+            type="text"
+            id="testInput"
+            placeholder="Temporary test input"
+            style="display: none;"
+        >
+
+    </div>
+
+
+    <!-- Fullscreen Warning -->
+    <div id="fullscreenWarning" style="display: none;">
+
+        <p id="fullscreenMessage"></p>
+
+        <button id="returnFullscreen">
+            Return to Fullscreen
+        </button>
+
+    </div>
+
+    <script>
+
+        // =========================================
+        // START TEST / ENTER FULLSCREEN
+        // =========================================
+
+        const startTestButton =
+            document.getElementById('startTest');
+        const examContent =
+            document.getElementById('examContent');
+        const testInput =
+            document.getElementById('testInput');
+
+        startTestButton.addEventListener('click', async function () {
+
+            try {
+
+    const cameraStarted = await startCamera();
+
+    if (!cameraStarted) {
+
+        alert(
+            'Camera access is required to start the test.'
+        );
+
+        return;
+
+    }
+
+    await document.documentElement.requestFullscreen();
+    isCurrentlyFullscreen = true;
+    isCurrentlyVisible = !document.hidden;
+
+    console.log(
+        'Fullscreen started successfully.'
+    );
+                // Show input after fullscreen starts
+                testInput.style.display = 'block';
+
+                // Hide Start Test button
+                startTestButton.style.display = 'none';
+
+            } catch (error) {
+
+                console.error(
+                    'Fullscreen request failed:',
+                    error
+                );
+
+            }
+
+        });
+
+
+        // =========================================
+        // FULLSCREEN EXIT DETECTION + TIMER (Genuine Transitions + 500ms Debounce)
+        // =========================================
+
+        let fullscreenExitCount = 0;
+        let fullscreenTimer = null;
+        let remainingSeconds = 15;
+        let isCurrentlyFullscreen = false;
+        let isCurrentlyVisible = true;
+        let lastFullscreenExitTime = 0;
+        let lastTabSwitchTime = 0;
+
+        const fullscreenWarning =
+            document.getElementById('fullscreenWarning');
+
+        const fullscreenMessage =
+            document.getElementById('fullscreenMessage');
+
+        const returnFullscreenButton =
+            document.getElementById('returnFullscreen');
+
+
+        document.addEventListener('fullscreenchange', function () {
+            const isFs = Boolean(document.fullscreenElement);
+
+            // Fullscreen was exited
+            if (!isFs) {
+                if (isCurrentlyFullscreen) {
+                    isCurrentlyFullscreen = false;
+                    const now = Date.now();
+                    if (now - lastFullscreenExitTime >= 500) {
+                        lastFullscreenExitTime = now;
+                        fullscreenExitCount++;
+                        fetch('/cheating-event', {
+                            method: 'POST',
+                            headers: {
+                                'Content-Type': 'application/json',
+                                'X-CSRF-TOKEN': document.querySelector('meta[name="csrf-token"]').content,
+                                'Accept': 'application/json'
+                            },
+                            body: JSON.stringify({
+                                event_type: 'fullscreen_exit',
+                                suspicion_score: 5
+                            })
+                        })
+                        .then(response => response.json())
+                        .then(data => {
+                            if (data && typeof data.total_score !== 'undefined') {
+                                const scoreEl = document.getElementById('score');
+                                if (scoreEl) scoreEl.textContent = 'Suspicion Score: ' + data.total_score;
+                            }
+                        })
+                        .catch(error => {
+                            console.error('Error storing fullscreen exit:', error);
+                        });
+                    }
+                }
+
+                examContent.style.display = 'none';
+                fullscreenWarning.style.display = 'block';
+                remainingSeconds = 15;
+                fullscreenMessage.textContent = 'Fullscreen exited. Please return to fullscreen. Time remaining: ' + remainingSeconds + ' seconds';
+
+                clearInterval(fullscreenTimer);
+                fullscreenTimer = setInterval(function () {
+                    remainingSeconds--;
+                    fullscreenMessage.textContent = 'Fullscreen exited. Please return to fullscreen. Time remaining: ' + remainingSeconds + ' seconds';
+                    if (remainingSeconds <= 0) {
+                        clearInterval(fullscreenTimer);
+                        fullscreenMessage.textContent = 'Grace period expired. Fullscreen was not restored.';
+                    }
+                }, 1000);
+            } else {
+                isCurrentlyFullscreen = true;
+                clearInterval(fullscreenTimer);
+                fullscreenWarning.style.display = 'none';
+                examContent.style.display = 'block';
+            }
+        });
+
+
+        // =========================================
+        // RETURN TO FULLSCREEN BUTTON
+        // =========================================
+
+        returnFullscreenButton.addEventListener(
+            'click',
+            async function () {
+                try {
+                    const cameraStarted = await startCamera();
+                    if (!cameraStarted) {
+                        alert('Camera access is required to continue the test.');
+                        return;
+                    }
+                    await document.documentElement.requestFullscreen();
+                    isCurrentlyFullscreen = true;
+                    examContent.style.display = 'block';
+                    clearInterval(fullscreenTimer);
+                    fullscreenWarning.style.display = 'none';
+                    console.log('Fullscreen restored.');
+                } catch (error) {
+                    console.error('Unable to restore fullscreen:', error);
+                }
+            }
+        );
+
+
+        // =========================================
+        // TAB SWITCH DETECTION (Genuine Transitions + 500ms Debounce)
+        // =========================================
+
+        document.addEventListener(
+            'visibilitychange',
+            function () {
+                const isHidden = (document.visibilityState === 'hidden' || document.hidden);
+
+                if (isHidden) {
+                    if (isCurrentlyVisible) {
+                        isCurrentlyVisible = false;
+                        const now = Date.now();
+                        if (now - lastTabSwitchTime >= 500) {
+                            lastTabSwitchTime = now;
+                            console.log('Tab switch detected at:', new Date().toLocaleString());
+
+                            fetch('/cheating-event', {
+                                method: 'POST',
+                                headers: {
+                                    'Content-Type': 'application/json',
+                                    'X-CSRF-TOKEN': document.querySelector('meta[name="csrf-token"]').content,
+                                    'Accept': 'application/json'
+                                },
+                                body: JSON.stringify({
+                                    event_type: 'tab_switch',
+                                    suspicion_score: 1
+                                })
+                            })
+                            .then(response => response.json())
+                            .then(data => {
+                                if (data && typeof data.total_score !== 'undefined') {
+                                    const scoreEl = document.getElementById('score');
+                                    if (scoreEl) scoreEl.textContent = 'Suspicion Score: ' + data.total_score;
+                                }
+                            })
+                            .catch(error => {
+                                console.error('Error storing event:', error);
+                            });
+                        }
+                    }
+                } else {
+                    isCurrentlyVisible = true;
+                }
+            }
+        );
+
+
+// =========================================
+// COPY BLOCK
+// =========================================
+
+document.addEventListener('copy', function (event) {
+
+    event.preventDefault();
+
+    console.log(
+        'Copy blocked in SecureTest.'
+    );
+
+});
+
+ // =========================================
+// PASTE BLOCK
+// =========================================
+
+document.addEventListener('paste', function (event) {
+
+    event.preventDefault();
+
+    console.log(
+        'Paste blocked in SecureTest.'
+    );
+
+});
+
+// =========================================
+// WEBCAM ACCESS
+// =========================================
+
+const webcam = document.getElementById('webcam');
+const cameraStatus = document.getElementById('cameraStatus');
+
+async function startCamera() {
+
+    try {
+
+        const stream = await navigator.mediaDevices.getUserMedia({
+            video: true,
+            audio: false
+        });
+
+       webcam.srcObject = stream;
+
+const videoTrack = stream.getVideoTracks()[0];
+
+videoTrack.onended = function () {
+
+    console.log(
+        'Camera stopped or disconnected.'
+    );
+
+    cameraStatus.textContent =
+        'Camera is required to continue the test.';
+
+    examContent.style.display = 'none';
+
+    fullscreenWarning.style.display = 'block';
+
+    fullscreenMessage.textContent =
+        'Camera access is required to continue the test.';
+
+};
+
+        cameraStatus.textContent =
+            'Camera is active.';
+
+        console.log(
+            'Camera started successfully.'
+        );
+
+        startFaceDetection();
+        detectEyeLandmarks();
+        return true;
+
+    } catch (error) {
+
+        cameraStatus.textContent =
+            'Camera access is required to start the test.';
+
+        console.error(
+            'Camera access failed:',
+            error
+        );
+
+        return false;
+
+    }
+
+}
+
+// =========================================
+// FACE DETECTION
+// =========================================
+
+const faceStatus =
+    document.getElementById('faceStatus');
+
+
+        // FACE DETECTION EVENT TRACKING (Max 2 screenshots per incident)
+        let noFaceStartTime = null;
+        let multipleFaceStartTime = null;
+        let currentFaceCount = -1;
+        let noFaceScreenshotCount = 0;
+        let multipleFaceScreenshotCount = 0;
+        let faceEventActive = false;
+
+        const NO_FACE_CONFIRMATION_TIME = 2000;
+        const NO_FACE_SAFEGUARD_TIME = 6000;
+        const MULTIPLE_FACE_CONFIRMATION_TIME = 2000;
+        const MULTIPLE_FACE_SAFEGUARD_TIME = 6000;
+
+        let attemptScreenshotCount = 0;
+        const MAX_ATTEMPT_SCREENSHOTS = 6;
+
+
+async function startFaceDetection() {
+
+    console.log(
+        'Waiting for MediaPipe Face Detector...'
+    );
+
+    while (!window.faceDetector) {
+
+        await new Promise(
+            resolve => setTimeout(resolve, 100)
+        );
+
+    }
+
+    console.log(
+        'Face Detector is available.'
+    );
+
+    faceStatus.textContent =
+        'Face detection active.';
+
+    faceDetectionRunning = true;
+
+    detectFaces();
+}
+
+
+function detectFaces() {
+
+    if (!faceDetectionRunning) {
+        return;
+    }
+
+    if (
+        !webcam.videoWidth ||
+        !webcam.videoHeight
+    ) {
+
+        requestAnimationFrame(
+            detectFaces
+        );
+
+        return;
+    }
+
+    try {
+
+        const timestamp =
+            performance.now();
+
+        const result =
+            window.faceDetector.detectForVideo(
+                webcam,
+                timestamp
+            );
+
+        const detections =
+            result.detections || [];
+
+        const faceCount =
+            detections.length;
+        currentFaceCount = faceCount;
+
+
+        // =====================================
+        // NO FACE (2s confirmation, max 2 screenshots)
+        // =====================================
+
+        if (faceCount === 0) {
+
+            faceStatus.textContent =
+                '⚠️ No face detected';
+
+            if (noFaceStartTime === null) {
+                noFaceStartTime = Date.now();
+            }
+
+            multipleFaceStartTime = null;
+            multipleFaceScreenshotCount = 0;
+
+            const noFaceDuration =
+                Date.now() - noFaceStartTime;
+
+            if (noFaceDuration >= NO_FACE_CONFIRMATION_TIME) {
+                if (noFaceScreenshotCount === 0) {
+                    noFaceScreenshotCount = 1;
+                    faceEventActive = true;
+                    sendFaceEvent('no_face_detected');
+                } else if (noFaceScreenshotCount === 1 && noFaceDuration >= NO_FACE_SAFEGUARD_TIME) {
+                    noFaceScreenshotCount = 2;
+                    sendFaceEvent('no_face_detected');
+                }
+            }
+
+        }
+
+
+        // =====================================
+        // ONE FACE (Immediate Reset on Resolution)
+        // =====================================
+
+        else if (faceCount === 1) {
+
+            faceStatus.textContent =
+                '✅ 1 face detected';
+
+            if (faceEventActive) {
+                sendFaceEvent(
+                    'face_normal'
+                );
+                faceEventActive = false;
+            }
+
+            noFaceStartTime = null;
+            noFaceScreenshotCount = 0;
+            multipleFaceStartTime = null;
+            multipleFaceScreenshotCount = 0;
+
+        }
+
+
+        // =====================================
+        // MULTIPLE FACES (2s confirmation, max 2 screenshots)
+        // =====================================
+
+        else {
+
+            faceStatus.textContent =
+                '🚨 Multiple faces detected: ' +
+                faceCount;
+
+            if (multipleFaceStartTime === null) {
+                multipleFaceStartTime = Date.now();
+            }
+
+            noFaceStartTime = null;
+            noFaceScreenshotCount = 0;
+
+            const multipleFaceDuration =
+                Date.now() - multipleFaceStartTime;
+
+            if (multipleFaceDuration >= MULTIPLE_FACE_CONFIRMATION_TIME) {
+                if (multipleFaceScreenshotCount === 0) {
+                    multipleFaceScreenshotCount = 1;
+                    faceEventActive = true;
+                    sendFaceEvent('multiple_faces_detected');
+                } else if (multipleFaceScreenshotCount === 1 && multipleFaceDuration >= MULTIPLE_FACE_SAFEGUARD_TIME) {
+                    multipleFaceScreenshotCount = 2;
+                    sendFaceEvent('multiple_faces_detected');
+                }
+            }
+
+        }
+
+    } catch (error) {
+
+        console.error(
+            'Face detection error:',
+            error
+        );
+
+    }
+
+    requestAnimationFrame(
+        detectFaces
+    );
+}
+
+// =========================================
+// SEND FACE EVENT + CAPTURE EVIDENCE (Quota Enforced)
+// =========================================
+
+async function sendFaceEvent(eventType) {
+
+    console.log(
+        'Face event detected:',
+        eventType
+    );
+
+    try {
+        const formData = new FormData();
+        formData.append('event_type', eventType);
+        formData.append('suspicion_score', 0);
+
+        const shouldCaptureScreenshot = attemptScreenshotCount < MAX_ATTEMPT_SCREENSHOTS && eventType !== 'face_normal';
+
+        if (shouldCaptureScreenshot && webcam && webcam.videoWidth && webcam.videoHeight) {
+            try {
+                const canvas = document.createElement('canvas');
+                canvas.width = webcam.videoWidth;
+                canvas.height = webcam.videoHeight;
+                const context = canvas.getContext('2d');
+                context.drawImage(webcam, 0, 0, canvas.width, canvas.height);
+
+                const screenshotBlob = await new Promise(resolve => {
+                    canvas.toBlob(blob => resolve(blob), 'image/jpeg', 0.85);
+                });
+
+                if (screenshotBlob) {
+                    formData.append('evidence', screenshotBlob, eventType + '_' + Date.now() + '.jpg');
+                }
+            } catch (err) {
+                console.warn('Canvas frame capture error:', err);
+            }
+        }
+
+        const response = await fetch('/cheating-event', {
+            method: 'POST',
+            headers: {
+                'X-CSRF-TOKEN': document.querySelector('meta[name="csrf-token"]').content,
+                'Accept': 'application/json'
+            },
+            body: formData
+        });
+
+        const data = await response.json();
+        if (data && typeof data.screenshot_count === 'number') {
+            attemptScreenshotCount = data.screenshot_count;
+        }
+        if (data && data.screenshot_quota_exhausted) {
+            attemptScreenshotCount = MAX_ATTEMPT_SCREENSHOTS;
+        }
+        if (data && typeof data.total_score !== 'undefined') {
+            const scoreEl = document.getElementById('score');
+            if (scoreEl) scoreEl.textContent = 'Suspicion Score: ' + data.total_score;
+        }
+
+        console.log('Face event stored:', data);
+        return data;
+
+    } catch (error) {
+        console.error('Error storing face event/evidence:', error);
+    }
+}
+
+// =========================================
+// EYE / GAZE MONITORING (Shared Proctoring Tracker)
+// =========================================
+
+const TrackerClass = window.EyeGazeTracker || EyeGazeTracker;
+const testGazeStatusEl = document.getElementById('gazeStatus');
+const eyeGazeTracker = new TrackerClass({
+    now: () => Date.now(),
+    onEvent: (eventType, desc) => {
+        console.log('🚨 Eye gaze proctoring event:', eventType, desc);
+        sendFaceEvent(eventType);
+    },
+    onStatusChange: (status) => {
+        if (testGazeStatusEl) {
+            testGazeStatusEl.textContent = 'Eye Gaze: ' + status;
+        }
+    }
+});
+
+let lastLandmarkerTimestamp = -1;
+
+function detectEyeLandmarks() {
+    if (!window.faceLandmarker || !webcam.videoWidth || !webcam.videoHeight) {
+        requestAnimationFrame(detectEyeLandmarks);
+        return;
+    }
+
+    try {
+        let timestamp = performance.now();
+        if (timestamp <= lastLandmarkerTimestamp) {
+            timestamp = lastLandmarkerTimestamp + 1;
+        }
+        lastLandmarkerTimestamp = timestamp;
+
+        const result = window.faceLandmarker.detectForVideo(webcam, timestamp);
+        const hasMesh = result.faceLandmarks && result.faceLandmarks.length > 0;
+        const isSingleFace = (currentFaceCount === 1) || (currentFaceCount === -1 && hasMesh);
+
+        if (!isSingleFace || currentFaceCount === 0 || currentFaceCount > 1) {
+            eyeGazeTracker.processFrame({
+                faceDetected: false,
+                landmarksPresent: false,
+                isEyeClosed: false,
+                avgGazeX: null,
+                avgGazeY: null,
+                handOverEyesDetected: false
+            });
+            requestAnimationFrame(detectEyeLandmarks);
+            return;
+        }
+
+        if (!hasMesh) {
+            eyeGazeTracker.processFrame({
+                faceDetected: true,
+                landmarksPresent: false,
+                isEyeClosed: false,
+                avgGazeX: null,
+                avgGazeY: null,
+                handOverEyesDetected: false
+            });
+            requestAnimationFrame(detectEyeLandmarks);
+            return;
+        }
+
+        const landmarks = result.faceLandmarks[0];
+
+        const leftMinX = Math.min(landmarks[33].x, landmarks[133].x);
+        const leftMaxX = Math.max(landmarks[33].x, landmarks[133].x);
+        const leftEyeWidth = leftMaxX - leftMinX;
+
+        const rightMinX = Math.min(landmarks[362].x, landmarks[263].x);
+        const rightMaxX = Math.max(landmarks[362].x, landmarks[263].x);
+        const rightEyeWidth = rightMaxX - rightMinX;
+
+        const leftMinY = Math.min(landmarks[159].y, landmarks[145].y);
+        const leftMaxY = Math.max(landmarks[159].y, landmarks[145].y);
+        const leftEyeHeight = leftMaxY - leftMinY;
+
+        const rightMinY = Math.min(landmarks[386].y, landmarks[374].y);
+        const rightMaxY = Math.max(landmarks[386].y, landmarks[374].y);
+        const rightEyeHeight = rightMaxY - rightMinY;
+
+        const eyesValid = (leftEyeWidth > 0.001 && rightEyeWidth > 0.001 && leftEyeHeight > 0.0005 && rightEyeHeight > 0.0005);
+
+        if (!eyesValid) {
+            eyeGazeTracker.processFrame({
+                faceDetected: true,
+                landmarksPresent: false,
+                isEyeClosed: false,
+                avgGazeX: null,
+                avgGazeY: null,
+                handOverEyesDetected: false
+            });
+            requestAnimationFrame(detectEyeLandmarks);
+            return;
+        }
+
+        const leftEAR = leftEyeHeight / leftEyeWidth;
+        const rightEAR = rightEyeHeight / rightEyeWidth;
+        const isEyeClosed = (leftEAR < 0.12 && rightEAR < 0.12);
+
+        function getCenter(points) {
+            let x = 0;
+            let y = 0;
+            points.forEach(point => {
+                x += point.x;
+                y += point.y;
+            });
+            return {
+                x: x / points.length,
+                y: y / points.length
+            };
+        }
+
+        const leftIris = [
+            landmarks[468],
+            landmarks[469],
+            landmarks[470],
+            landmarks[471],
+            landmarks[472]
+        ];
+
+        const rightIris = [
+            landmarks[473],
+            landmarks[474],
+            landmarks[475],
+            landmarks[476],
+            landmarks[477]
+        ];
+
+        const leftIrisCenter = getCenter(leftIris);
+        const rightIrisCenter = getCenter(rightIris);
+
+        const leftGazeX = (leftIrisCenter.x - leftMinX) / leftEyeWidth;
+        const rightGazeX = (rightIrisCenter.x - rightMinX) / rightEyeWidth;
+        const gazeX = (leftGazeX + rightGazeX) / 2;
+
+        const leftGazeY = (leftIrisCenter.y - leftMinY) / leftEyeHeight;
+        const rightGazeY = (rightIrisCenter.y - rightMinY) / rightEyeHeight;
+        const gazeY = (leftGazeY + rightGazeY) / 2;
+
+        eyeGazeTracker.processFrame({
+            faceDetected: true,
+            landmarksPresent: true,
+            isEyeClosed: isEyeClosed,
+            avgGazeX: gazeX,
+            avgGazeY: gazeY,
+            handOverEyesDetected: false
+        });
+
+    } catch (error) {
+        console.error('Eye/gaze detection error:', error);
+    }
+
+    requestAnimationFrame(detectEyeLandmarks);
+}
+    </script>
+
+</body>
+
+</html>

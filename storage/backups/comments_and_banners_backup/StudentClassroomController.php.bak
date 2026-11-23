@@ -1,0 +1,483 @@
+<?php
+
+namespace App\Http\Controllers\Student;
+
+use App\Http\Controllers\Controller;
+use App\Models\Classroom;
+use App\Models\ClassroomTest;
+use App\Models\ExamAttempt;
+use App\Models\Question;
+use App\Models\StudentAnswer;
+use App\Models\Test;
+use App\Models\ClassroomJoinRequest;
+use App\Models\ClassroomMaterial;
+use Illuminate\Http\JsonResponse;
+use Illuminate\Http\RedirectResponse;
+use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Auth;
+use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Storage;
+use Illuminate\View\View;
+use Symfony\Component\HttpFoundation\StreamedResponse;
+
+class ClassroomController extends Controller
+{
+    /**
+     * Display a listing of classrooms the student has enrolled in.
+     */
+    public function index(): View
+    {
+        $classrooms = Auth::user()->enrolledClassrooms()
+            ->with('teacher')
+            ->withCount(['students', 'tests'])
+            ->latest('classrooms.created_at')
+            ->get();
+
+        $myJoinRequests = Auth::user()->classroomJoinRequests()
+            ->with(['classroom.teacher'])
+            ->latest()
+            ->get();
+
+        return view('student.classrooms.index', compact('classrooms', 'myJoinRequests'));
+    }
+
+    /**
+     * Join a classroom using a join code.
+     */
+    public function join(Request $request): RedirectResponse
+    {
+        $request->validate([
+            'code' => ['required', 'string', 'max:20'],
+        ]);
+
+        $code = strtoupper(trim($request->code));
+        $classroom = Classroom::where('code', $code)->first();
+
+        if (!$classroom) {
+            return back()->with('error', "Invalid join code '{$code}'. Please verify the code with your teacher.")
+                ->withInput();
+        }
+
+        // Prevent duplicate enrollment (Edge Case 1: preserving existing enrollments)
+        if ($classroom->hasStudent(Auth::id())) {
+            return redirect()->route('student.classrooms.show', $classroom)
+                ->with('info', "You are already enrolled in '{$classroom->name}'.");
+        }
+
+        // Prevent creator from enrolling in their own classroom as a student
+        if ($classroom->user_id === Auth::id()) {
+            return redirect()->route('teacher.classrooms.show', $classroom)
+                ->with('info', "You are the instructor and owner of '{$classroom->name}'.");
+        }
+
+        // Check if classroom has email restriction
+        if ($classroom->is_email_restricted && !$classroom->isEmailAllowed(Auth::user()->email)) {
+            $existingRequest = $classroom->joinRequests()->where('user_id', Auth::id())->first();
+
+            if ($existingRequest) {
+                if ($existingRequest->isPending()) {
+                    return redirect()->route('student.classrooms.index')
+                        ->with('info', "Your access request for '{$classroom->name}' is currently pending teacher review.");
+                }
+
+                if ($existingRequest->isAccepted()) {
+                    // Approved request creates normal classroom membership
+                    $classroom->students()->syncWithoutDetaching([Auth::id()]);
+                    return redirect()->route('student.classrooms.show', $classroom)
+                        ->with('success', "Your access request for '{$classroom->name}' has been approved!");
+                }
+
+                if ($existingRequest->isRejected()) {
+                    // Edge Case 3: Allow previously rejected request to be resubmitted by updating existing record
+                    $existingRequest->update([
+                        'status' => ClassroomJoinRequest::STATUS_PENDING,
+                        'reviewed_by' => null,
+                        'reviewed_at' => null,
+                    ]);
+
+                    return redirect()->route('student.classrooms.index')
+                        ->with('info', "Your previous access request for '{$classroom->name}' has been re-submitted for teacher review.");
+                }
+            }
+
+            // Create new join request
+            $classroom->joinRequests()->create([
+                'user_id' => Auth::id(),
+                'status' => ClassroomJoinRequest::STATUS_PENDING,
+            ]);
+
+            return redirect()->route('student.classrooms.index')
+                ->with('info', "Your email ('" . Auth::user()->email . "') does not match this classroom's allowed domain . An access request has been submitted to the instructor for review.");
+        }
+
+        // Enroll student directly (unrestricted classroom or matching email)
+        $classroom->students()->attach(Auth::id());
+
+        return redirect()->route('student.classrooms.show', $classroom)
+            ->with('success', "Successfully joined classroom '{$classroom->name}'!");
+    }
+
+    /**
+     * Display classroom details and its assigned tests categorized into sections:
+     * Available, Upcoming, Submitted, and Past Deadline.
+     */
+    public function show(Classroom $classroom): View
+    {
+        // Enforce backend access: Student must be enrolled in this classroom
+        if (!$classroom->hasStudent(Auth::id())) {
+            abort(403, 'You are not enrolled in this classroom.');
+        }
+
+        $classroom->load(['teacher', 'materials.uploader']);
+
+        $classroomTests = ClassroomTest::where('classroom_id', $classroom->id)
+            ->where('is_active', true)
+            ->with(['test.teacher', 'test.questions'])
+            ->latest()
+            ->get();
+
+        $myAttempts = ExamAttempt::where('classroom_id', $classroom->id)
+            ->where('user_id', Auth::id())
+            ->get()
+            ->keyBy('test_id');
+
+        // Group into sections
+        $availableTests = collect();
+        $upcomingTests = collect();
+        $submittedTests = collect();
+        $pastDeadlineTests = collect();
+
+        foreach ($classroomTests as $assignment) {
+            $attempt = $myAttempts[$assignment->test_id] ?? null;
+
+            if ($attempt && $attempt->isSubmitted()) {
+                $submittedTests->push($assignment);
+            } elseif ($assignment->isUpcoming()) {
+                $upcomingTests->push($assignment);
+            } elseif ($assignment->isPastDeadline()) {
+                $pastDeadlineTests->push($assignment);
+            } else {
+                $availableTests->push($assignment);
+            }
+        }
+
+        return view('student.classrooms.show', compact(
+            'classroom',
+            'classroomTests',
+            'availableTests',
+            'upcomingTests',
+            'submittedTests',
+            'pastDeadlineTests',
+            'myAttempts'
+        ));
+    }
+
+    /**
+     * Show test overview and instructions inside a classroom.
+     */
+    public function showTest(Classroom $classroom, Test $test): View
+    {
+        if (!$classroom->hasStudent(Auth::id())) {
+            abort(403, 'You are not enrolled in this classroom.');
+        }
+
+        $assignment = ClassroomTest::where('classroom_id', $classroom->id)
+            ->where('test_id', $test->id)
+            ->where('is_active', true)
+            ->first();
+
+        if (!$assignment) {
+            abort(404, 'Test is not assigned to this classroom.');
+        }
+
+        $test->load(['questions.options', 'teacher']);
+
+        $attempt = ExamAttempt::where('classroom_id', $classroom->id)
+            ->where('test_id', $test->id)
+            ->where('user_id', Auth::id())
+            ->with(['answers.selectedOption', 'answers.question'])
+            ->first();
+
+        return view('student.classrooms.test-show', compact('classroom', 'test', 'assignment', 'attempt'));
+    }
+
+    /**
+     * Start / continue taking an assigned exam with anti-cheating proctoring.
+     */
+    public function takeTest(Classroom $classroom, Test $test): View|RedirectResponse
+    {
+        if (!$classroom->hasStudent(Auth::id())) {
+            abort(403, 'You are not enrolled in this classroom.');
+        }
+
+        $assignment = ClassroomTest::where('classroom_id', $classroom->id)
+            ->where('test_id', $test->id)
+            ->where('is_active', true)
+            ->firstOrFail();
+
+        // Check if test is upcoming
+        if ($assignment->isUpcoming()) {
+            return redirect()->route('student.classrooms.tests.show', [$classroom, $test])
+                ->with('error', 'This examination is scheduled for the future and is not yet available.');
+        }
+
+        // Check deadline enforcement
+        if ($assignment->isPastDeadline() && !$assignment->allow_late_submissions) {
+            return redirect()->route('student.classrooms.tests.show', [$classroom, $test])
+                ->with('error', 'The deadline for this examination has passed. Late submissions are not permitted.');
+        }
+
+        // Check if student has already submitted
+        $attempt = ExamAttempt::firstOrCreate(
+            [
+                'classroom_id' => $classroom->id,
+                'test_id' => $test->id,
+                'user_id' => Auth::id(),
+            ],
+            [
+                'status' => ExamAttempt::STATUS_IN_PROGRESS,
+                'is_late' => $assignment->isPastDeadline(),
+                'score' => 0,
+                'total_marks' => $test->total_marks,
+                'started_at' => now(),
+            ]
+        );
+
+        if ($attempt->isSubmitted()) {
+            return redirect()->route('student.classrooms.tests.show', [$classroom, $test])
+                ->with('info', 'You have already submitted this examination.');
+        }
+
+        // Calculate remaining duration countdown in seconds
+        $totalAllowedSeconds = (int) $test->duration_minutes * 60;
+        $elapsedSeconds = $attempt->started_at ? (int) now()->diffInSeconds($attempt->started_at) : 0;
+        $remainingSeconds = max(1, $totalAllowedSeconds - $elapsedSeconds);
+
+        $test->load(['questions.options']);
+
+        // Fetch existing answers saved so far
+        $existingAnswers = StudentAnswer::where('exam_attempt_id', $attempt->id)
+            ->get()
+            ->keyBy('question_id');
+
+        $isLateAttempt = $assignment->isPastDeadline();
+
+        return view('student.classrooms.take', compact(
+            'classroom',
+            'test',
+            'assignment',
+            'attempt',
+            'existingAnswers',
+            'remainingSeconds',
+            'isLateAttempt'
+        ));
+    }
+
+    /**
+     * Asynchronously save an individual answer as the student progresses.
+     */
+    public function saveAnswer(Request $request, Classroom $classroom, Test $test): JsonResponse
+    {
+        if (!$classroom->hasStudent(Auth::id())) {
+            return response()->json(['error' => 'Unauthorized'], 403);
+        }
+
+        $attempt = ExamAttempt::where('classroom_id', $classroom->id)
+            ->where('test_id', $test->id)
+            ->where('user_id', Auth::id())
+            ->first();
+
+        if (!$attempt || $attempt->isSubmitted()) {
+            return response()->json(['error' => 'Exam attempt has already been submitted or not found.'], 403);
+        }
+
+        $validated = $request->validate([
+            'question_id' => ['required', 'integer'],
+            'selected_option_id' => ['nullable', 'integer'],
+            'text_answer' => ['nullable', 'string', 'max:10000'],
+        ]);
+
+        $question = Question::where('id', $validated['question_id'])
+            ->where('test_id', $test->id)
+            ->first();
+
+        if (!$question) {
+            return response()->json(['error' => 'Invalid question'], 422);
+        }
+
+        if ($question->isMcq()) {
+            $selectedOptId = !empty($validated['selected_option_id']) ? (int) $validated['selected_option_id'] : null;
+            $correctOption = $question->options->firstWhere('is_correct', true);
+            $isCorrect = ($correctOption && $selectedOptId === $correctOption->id);
+            $marksAwarded = $isCorrect ? $question->marks : 0;
+
+            StudentAnswer::updateOrCreate(
+                [
+                    'exam_attempt_id' => $attempt->id,
+                    'question_id' => $question->id,
+                ],
+                [
+                    'selected_option_id' => $selectedOptId,
+                    'text_answer' => null,
+                    'is_correct' => $isCorrect,
+                    'marks_awarded' => $marksAwarded,
+                    'is_graded' => true,
+                ]
+            );
+        } else {
+            StudentAnswer::updateOrCreate(
+                [
+                    'exam_attempt_id' => $attempt->id,
+                    'question_id' => $question->id,
+                ],
+                [
+                    'selected_option_id' => null,
+                    'text_answer' => isset($validated['text_answer']) ? trim($validated['text_answer']) : null,
+                    'is_correct' => null,
+                    'marks_awarded' => 0,
+                    'is_graded' => false,
+                ]
+            );
+        }
+
+        return response()->json(['status' => 'saved', 'success' => true]);
+    }
+
+    /**
+     * Submit an exam attempt, auto-grade MCQs, and record student answers.
+     */
+    public function submitTest(Request $request, Classroom $classroom, Test $test): RedirectResponse
+    {
+        if (!$classroom->hasStudent(Auth::id())) {
+            abort(403, 'You are not enrolled in this classroom.');
+        }
+
+        $assignment = ClassroomTest::where('classroom_id', $classroom->id)
+            ->where('test_id', $test->id)
+            ->where('is_active', true)
+            ->firstOrFail();
+
+        $attempt = ExamAttempt::where('classroom_id', $classroom->id)
+            ->where('test_id', $test->id)
+            ->where('user_id', Auth::id())
+            ->firstOrFail();
+
+        if ($attempt->isSubmitted()) {
+            return redirect()->route('student.classrooms.tests.show', [$classroom, $test])
+                ->with('info', 'This exam attempt has already been submitted.');
+        }
+
+        // Determine if submission is late
+        $isLate = $assignment->isPastDeadline();
+
+        $answersInput = $request->input('answers', []);
+        $totalScore = 0;
+        $test->load('questions.options');
+
+        DB::transaction(function () use ($attempt, $test, $answersInput, $isLate, &$totalScore) {
+            foreach ($test->questions as $question) {
+                $userAns = $answersInput[$question->id] ?? null;
+
+                if ($question->isMcq()) {
+                    $selectedOptionId = (!empty($userAns) && is_numeric($userAns)) ? (int) $userAns : null;
+
+                    // Fallback to existing answer if not present in submit form
+                    if ($selectedOptionId === null) {
+                        $existingAnswer = StudentAnswer::where('exam_attempt_id', $attempt->id)
+                            ->where('question_id', $question->id)
+                            ->first();
+                        if ($existingAnswer && $existingAnswer->selected_option_id) {
+                            $selectedOptionId = $existingAnswer->selected_option_id;
+                        }
+                    }
+
+                    $correctOption = $question->options->firstWhere('is_correct', true);
+                    $isCorrect = ($correctOption && $selectedOptionId === $correctOption->id);
+                    $marksAwarded = $isCorrect ? $question->marks : 0;
+                    $totalScore += $marksAwarded;
+
+                    StudentAnswer::updateOrCreate(
+                        [
+                            'exam_attempt_id' => $attempt->id,
+                            'question_id' => $question->id,
+                        ],
+                        [
+                            'selected_option_id' => $selectedOptionId,
+                            'text_answer' => null,
+                            'is_correct' => $isCorrect,
+                            'marks_awarded' => $marksAwarded,
+                            'is_graded' => true,
+                        ]
+                    );
+                } else {
+                    $textAnswer = is_string($userAns) ? trim($userAns) : null;
+
+                    // Fallback to existing answer if submit form sent empty string or null
+                    if (empty($textAnswer)) {
+                        $existingAnswer = StudentAnswer::where('exam_attempt_id', $attempt->id)
+                            ->where('question_id', $question->id)
+                            ->first();
+                        if ($existingAnswer && !empty($existingAnswer->text_answer)) {
+                            $textAnswer = $existingAnswer->text_answer;
+                        }
+                    }
+
+                    StudentAnswer::updateOrCreate(
+                        [
+                            'exam_attempt_id' => $attempt->id,
+                            'question_id' => $question->id,
+                        ],
+                        [
+                            'selected_option_id' => null,
+                            'text_answer' => $textAnswer,
+                            'is_correct' => null, // Written question evaluated by teacher
+                            'marks_awarded' => 0,
+                            'is_graded' => false,
+                        ]
+                    );
+                }
+            }
+
+            $hasWrittenQuestions = $test->questions->contains(fn ($q) => $q->isText());
+            $initialStatus = $hasWrittenQuestions ? ExamAttempt::STATUS_SUBMITTED : ExamAttempt::STATUS_GRADED;
+            $gradedAt = $hasWrittenQuestions ? null : now();
+
+            $attempt->update([
+                'status' => $initialStatus,
+                'is_late' => $isLate,
+                'submitted_at' => now(),
+                'graded_at' => $gradedAt,
+                'score' => $totalScore,
+                'total_marks' => $test->total_marks,
+            ]);
+        });
+
+        $message = $isLate
+            ? "Exam '{$test->title}' submitted (marked as Late Submission). Your responses have been saved."
+            : "Exam '{$test->title}' submitted successfully! Your responses have been saved.";
+
+        return redirect()->route('student.classrooms.tests.show', [$classroom, $test])
+            ->with('success', $message);
+    }
+
+    /**
+     * Securely download study material for an enrolled classroom.
+     */
+    public function downloadMaterial(Classroom $classroom, ClassroomMaterial $material): StreamedResponse
+    {
+        // Enforce membership
+        if (!$classroom->hasStudent(Auth::id())) {
+            abort(403, 'You are not enrolled in this classroom.');
+        }
+
+        if ($material->classroom_id !== $classroom->id) {
+            abort(404, 'Material does not belong to this classroom.');
+        }
+
+        if (!Storage::disk('local')->exists($material->file_path)) {
+            abort(404, 'Material file not found on disk.');
+        }
+
+        return Storage::disk('local')->download($material->file_path, $material->original_filename);
+    }
+}

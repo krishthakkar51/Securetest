@@ -1,0 +1,670 @@
+<x-app-layout>
+    <x-slot name="header">
+        <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+            <div>
+                <div class="flex items-center gap-2">
+                    <a href="{{ route('teacher.classrooms.show', $classroom) }}" class="text-xs font-semibold text-indigo-600 dark:text-indigo-400 hover:underline">
+                        {{ $classroom->name }}
+                    </a>
+                    <span class="text-xs text-gray-400">&rsaquo;</span>
+                    <a href="{{ route('teacher.classrooms.tests.results', [$classroom, $test]) }}" class="text-xs font-semibold text-indigo-600 dark:text-indigo-400 hover:underline">
+                        {{ $test->title }} Results
+                    </a>
+                    <span class="text-xs text-gray-400">&rsaquo;</span>
+                    <span class="text-xs text-gray-600 dark:text-gray-300 font-semibold">Grade Attempt</span>
+                </div>
+                <h2 class="font-bold text-2xl text-gray-800 dark:text-gray-100 leading-tight mt-1">
+                    Review & Grade: {{ $attempt->student->name }}
+                </h2>
+                <p class="text-xs text-gray-500 dark:text-gray-400 mt-1">
+                    Proctoring audit evidence review and faculty evaluation of examination responses.
+                </p>
+            </div>
+            <div class="flex items-center gap-3">
+                <a href="{{ route('teacher.classrooms.tests.results', [$classroom, $test]) }}" class="inline-flex items-center text-xs font-semibold px-3.5 py-2 bg-gray-100 hover:bg-gray-200 dark:bg-gray-700 dark:hover:bg-gray-600 rounded-xl text-gray-700 dark:text-gray-200 transition">
+                    &larr; Back to Results
+                </a>
+            </div>
+        </div>
+    </x-slot>
+
+    <div class="py-8" x-data="{ modalOpen: false, modalImage: '' }">
+        <div class="max-w-7xl mx-auto sm:px-6 lg:px-8 space-y-6">
+
+            <!-- Flash Messages -->
+            @if (session('success'))
+                <div class="p-4 bg-emerald-50 dark:bg-emerald-900/30 border border-emerald-200 dark:border-emerald-800 rounded-xl text-emerald-800 dark:text-emerald-300 text-sm flex items-center justify-between">
+                    <div class="flex items-center">
+                        <svg class="w-5 h-5 mr-3 text-emerald-600 dark:text-emerald-400 shrink-0" fill="currentColor" viewBox="0 0 20 20">
+                            <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clip-rule="evenodd"></path>
+                        </svg>
+                        <span>{{ session('success') }}</span>
+                    </div>
+                </div>
+            @endif
+
+            @if ($errors->any())
+                <div class="p-4 bg-rose-50 dark:bg-rose-900/30 border border-rose-200 dark:border-rose-800 rounded-xl text-rose-800 dark:text-rose-300 text-sm space-y-1">
+                    <p class="font-bold">Please correct the validation errors below:</p>
+                    <ul class="list-disc list-inside text-xs">
+                        @foreach ($errors->all() as $error)
+                            <li>{{ $error }}</li>
+                        @endforeach
+                    </ul>
+                </div>
+            @endif
+
+            <!-- Attempt Summary Header Card -->
+            <div class="bg-white dark:bg-gray-800 rounded-2xl shadow-sm border border-gray-200 dark:border-gray-700 p-6">
+                <div class="flex flex-col md:flex-row md:items-center md:justify-between gap-6">
+                    <div class="flex items-center gap-4">
+                        <div class="w-14 h-14 rounded-2xl {{ $attempt->is_late ? 'bg-amber-100 text-amber-700 dark:bg-amber-900/50 dark:text-amber-300' : 'bg-indigo-100 text-indigo-700 dark:bg-indigo-900/50 dark:text-indigo-300' }} flex items-center justify-center font-bold text-xl shadow-inner">
+                            {{ strtoupper(substr($attempt->student->name, 0, 1)) }}
+                        </div>
+                        <div>
+                            <div class="flex items-center gap-2">
+                                <h3 class="text-xl font-bold text-gray-900 dark:text-gray-100">{{ $attempt->student->name }}</h3>
+                                @if ($attempt->is_late)
+                                    <span class="px-2.5 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider bg-amber-100 text-amber-800 dark:bg-amber-900/50 dark:text-amber-300 border border-amber-300">
+                                        Submitted Late
+                                    </span>
+                                @else
+                                    <span class="px-2.5 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider bg-emerald-100 text-emerald-800 dark:bg-emerald-900/50 dark:text-emerald-300">
+                                        On Time
+                                    </span>
+                                @endif
+                            </div>
+                            <p class="text-xs text-gray-500 dark:text-gray-400 mt-0.5">
+                                {{ $attempt->student->email }} &bull; Classroom: <strong>{{ $classroom->name }}</strong>
+                            </p>
+                            <p class="text-[11px] text-gray-400 mt-1">
+                                Started: {{ $attempt->started_at ? $attempt->started_at->format('M d, Y h:i A') : 'N/A' }} &bull;
+                                Submitted: {{ $attempt->submitted_at ? $attempt->submitted_at->format('M d, Y h:i A') : 'In Progress' }}
+                            </p>
+                        </div>
+                    </div>
+
+                    <div class="flex flex-wrap items-center gap-4">
+                        <!-- Original Score Pill -->
+                        <div class="p-3 bg-gray-50 dark:bg-gray-700/40 rounded-xl text-center min-w-[120px] border border-gray-200 dark:border-gray-700">
+                            <span class="block text-2xl font-black text-gray-900 dark:text-gray-100 font-mono">
+                                {{ $attempt->score }} <span class="text-sm font-semibold text-gray-400">/ {{ $attempt->total_marks }}</span>
+                            </span>
+                            <span class="text-[10px] font-bold uppercase tracking-wider text-gray-500 dark:text-gray-400">Exam Marks</span>
+                        </div>
+
+                        <!-- Negative Deduction Pill if present -->
+                        @if ($attempt->negative_marks > 0)
+                            <div class="p-3 bg-rose-50 dark:bg-rose-900/30 rounded-xl text-center min-w-[100px] border border-rose-200 dark:border-rose-800">
+                                <span class="block text-2xl font-black text-rose-600 dark:text-rose-400 font-mono">
+                                    &minus;{{ $attempt->negative_marks }}
+                                </span>
+                                <span class="text-[10px] font-bold uppercase tracking-wider text-rose-600 dark:text-rose-400">Deduction</span>
+                            </div>
+                        @endif
+
+                        <!-- Final Marks Pill -->
+                        <div class="p-3 bg-indigo-50 dark:bg-indigo-900/30 rounded-xl text-center min-w-[120px] border border-indigo-200 dark:border-indigo-800">
+                            <span class="block text-2xl font-black text-indigo-700 dark:text-indigo-300 font-mono">
+                                {{ $attempt->final_marks }} <span class="text-sm font-semibold text-indigo-400">/ {{ $attempt->total_marks }}</span>
+                            </span>
+                            <span class="text-[10px] font-bold uppercase tracking-wider text-indigo-700 dark:text-indigo-300">Final Marks</span>
+                        </div>
+
+                        <!-- Grading Status Pill -->
+                        <div class="p-3 bg-gray-50 dark:bg-gray-700/40 rounded-xl text-center min-w-[140px] border border-gray-200 dark:border-gray-700">
+                            @if ($attempt->isFullyGraded())
+                                <span class="inline-flex items-center text-xs font-bold px-2.5 py-1 rounded-full bg-emerald-100 text-emerald-800 dark:bg-emerald-900/50 dark:text-emerald-300">
+                                    <span class="w-2 h-2 rounded-full bg-emerald-500 mr-1.5"></span>
+                                    Fully Graded
+                                </span>
+                            @elseif ($attempt->isPartiallyGraded())
+                                <span class="inline-flex items-center text-xs font-bold px-2.5 py-1 rounded-full bg-amber-100 text-amber-800 dark:bg-amber-900/50 dark:text-amber-300">
+                                    <span class="w-2 h-2 rounded-full bg-amber-500 mr-1.5"></span>
+                                    Partially Graded
+                                </span>
+                            @else
+                                <span class="inline-flex items-center text-xs font-bold px-2.5 py-1 rounded-full bg-indigo-100 text-indigo-800 dark:bg-indigo-900/50 dark:text-indigo-300">
+                                    <span class="w-2 h-2 rounded-full bg-indigo-500 mr-1.5"></span>
+                                    Ungraded
+                                </span>
+                            @endif
+                            <span class="block text-[10px] font-medium text-gray-400 mt-1">
+                                Written: {{ $attempt->gradedWrittenAnswersCount() }} / {{ $attempt->writtenAnswersCount() }} graded
+                            </span>
+                        </div>
+
+                        <!-- Cheating Anomaly Alerts Count -->
+                        <div class="p-3 bg-gray-50 dark:bg-gray-700/40 rounded-xl text-center min-w-[120px] border border-gray-200 dark:border-gray-700">
+                            <span class="block text-2xl font-black {{ $cheatingEvents->count() > 0 ? 'text-rose-600 dark:text-rose-400' : 'text-emerald-600 dark:text-emerald-400' }}">
+                                {{ $cheatingEvents->count() }}
+                            </span>
+                            <span class="text-[10px] font-bold uppercase tracking-wider text-gray-500 dark:text-gray-400">Suspicious Events</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- SECTION A: Anti-Cheating & Proctoring Evidence Review -->
+            <div class="bg-white dark:bg-gray-800 rounded-2xl shadow-sm border border-gray-200 dark:border-gray-700 overflow-hidden">
+                <div class="p-6 border-b border-gray-200 dark:border-gray-700 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 bg-gradient-to-r from-gray-50 to-white dark:from-gray-800 dark:to-gray-800">
+                    <div class="flex items-center gap-3">
+                        <div class="w-10 h-10 rounded-xl bg-rose-100 dark:bg-rose-900/40 text-rose-600 dark:text-rose-400 flex items-center justify-center">
+                            <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"></path>
+                            </svg>
+                        </div>
+                        <div>
+                            <h3 class="font-bold text-base text-gray-900 dark:text-gray-100">Anti-Cheating Proctoring Audit Log</h3>
+                            <p class="text-xs text-gray-500 dark:text-gray-400">
+                                Detailed suspicious anomaly timeline and captured visual evidence for this attempt.
+                            </p>
+                        </div>
+                    </div>
+                    <span class="text-xs font-semibold px-3 py-1 rounded-full {{ $cheatingEvents->count() > 0 ? 'bg-rose-100 text-rose-800 dark:bg-rose-900/50 dark:text-rose-300' : 'bg-emerald-100 text-emerald-800 dark:bg-emerald-900/50 dark:text-emerald-300' }}">
+                        {{ $cheatingEvents->count() }} {{ \Illuminate\Support\Str::plural('anomaly', $cheatingEvents->count()) }} recorded
+                    </span>
+                </div>
+
+                <!-- Objective Anomaly Disclaimer -->
+                <div class="p-4 mx-6 my-4 bg-amber-50/80 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800 rounded-xl text-xs text-amber-900 dark:text-amber-200 flex items-start gap-3">
+                    <svg class="w-5 h-5 text-amber-600 dark:text-amber-400 shrink-0 mt-0.5" fill="currentColor" viewBox="0 0 20 20">
+                        <path fill-rule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zM9 9a1 1 0 000 2v3a1 1 0 001 1h1a1 1 0 100-2v-3a1 1 0 00-1-1H9z" clip-rule="evenodd"></path>
+                    </svg>
+                    <div>
+                        <strong class="font-semibold block mb-0.5">Objective Anomaly Review Guideline:</strong>
+                        <span>Suspicious events and captured screenshot frames represent automated biometric and browser environment detections. They are intended as supporting indicators for faculty evaluation and should be reviewed objectively in context alongside the student's submission, rather than treated as automatic proof of cheating.</span>
+                    </div>
+                </div>
+
+                <!-- Events List / Timeline -->
+                <div class="p-6 pt-0">
+                    @if ($cheatingEvents->count() > 0)
+                        <div class="overflow-x-auto">
+                            <table class="w-full text-left text-xs">
+                                <thead>
+                                    <tr class="border-b border-gray-200 dark:border-gray-700 text-gray-500 dark:text-gray-400 uppercase tracking-wider font-semibold">
+                                        <th class="py-3 px-3">Event Type</th>
+                                        <th class="py-3 px-3">Timestamp</th>
+                                        <th class="py-3 px-3 text-center">Score Weight</th>
+                                        <th class="py-3 px-3">Resolution Status</th>
+                                        <th class="py-3 px-3 text-right">Evidence Screenshot</th>
+                                    </tr>
+                                </thead>
+                                <tbody class="divide-y divide-gray-100 dark:divide-gray-700">
+                                    @foreach ($cheatingEvents as $event)
+                                        <tr class="hover:bg-gray-50 dark:hover:bg-gray-700/30 transition">
+                                            <!-- Event Type -->
+                                            <td class="py-3 px-3">
+                                                <div class="flex items-center gap-2">
+                                                    @if (in_array($event->event_type, ['tab_switch', 'fullscreen_exit', 'fullscreen_timeout']))
+                                                        <span class="px-2 py-0.5 rounded font-bold text-[11px] bg-rose-100 text-rose-800 dark:bg-rose-900/50 dark:text-rose-300">
+                                                            {{ ucwords(str_replace('_', ' ', $event->event_type)) }}
+                                                        </span>
+                                                    @elseif (in_array($event->event_type, ['multiple_faces_detected', 'no_face_detected']))
+                                                        <span class="px-2 py-0.5 rounded font-bold text-[11px] bg-amber-100 text-amber-800 dark:bg-amber-900/50 dark:text-amber-300">
+                                                            {{ ucwords(str_replace('_', ' ', $event->event_type)) }}
+                                                        </span>
+                                                    @elseif ($event->event_type === 'gaze_away_left')
+                                                        <span class="px-2 py-0.5 rounded font-bold text-[11px] bg-purple-100 text-purple-800 dark:bg-purple-900/50 dark:text-purple-300">
+                                                            Gaze: Looking Left
+                                                        </span>
+                                                    @elseif ($event->event_type === 'gaze_away_right')
+                                                        <span class="px-2 py-0.5 rounded font-bold text-[11px] bg-purple-100 text-purple-800 dark:bg-purple-900/50 dark:text-purple-300">
+                                                            Gaze: Looking Right
+                                                        </span>
+                                                    @elseif ($event->event_type === 'gaze_away_up')
+                                                        <span class="px-2 py-0.5 rounded font-bold text-[11px] bg-purple-100 text-purple-800 dark:bg-purple-900/50 dark:text-purple-300">
+                                                            Gaze: Looking Up
+                                                        </span>
+                                                    @elseif ($event->event_type === 'gaze_away_down')
+                                                        <span class="px-2 py-0.5 rounded font-bold text-[11px] bg-purple-100 text-purple-800 dark:bg-purple-900/50 dark:text-purple-300">
+                                                            Gaze: Looking Down
+                                                        </span>
+                                                    @elseif ($event->event_type === 'eyes_not_detected')
+                                                        <span class="px-2 py-0.5 rounded font-bold text-[11px] bg-amber-100 text-amber-800 dark:bg-amber-900/50 dark:text-amber-300">
+                                                            Eyes Undetected (Face Visible)
+                                                        </span>
+                                                    @elseif ($event->event_type === 'eyes_covered_object')
+                                                        <span class="px-2 py-0.5 rounded font-bold text-[11px] bg-rose-100 text-rose-800 dark:bg-rose-900/50 dark:text-rose-300">
+                                                            Both Eyes Covered by Object
+                                                        </span>
+                                                    @elseif ($event->event_type === 'abnormal_eye_movement')
+                                                        <span class="px-2 py-0.5 rounded font-bold text-[11px] bg-purple-100 text-purple-800 dark:bg-purple-900/50 dark:text-purple-300">
+                                                            Gaze / Eye Movement
+                                                        </span>
+                                                    @else
+                                                        <span class="px-2 py-0.5 rounded font-bold text-[11px] bg-gray-100 text-gray-800 dark:bg-gray-700 dark:text-gray-300">
+                                                            {{ ucwords(str_replace('_', ' ', $event->event_type)) }}
+                                                        </span>
+                                                    @endif
+                                                </div>
+                                            </td>
+
+                                            <!-- Timestamp -->
+                                            <td class="py-3 px-3 font-mono text-gray-600 dark:text-gray-300">
+                                                {{ $event->occurred_at ? $event->occurred_at->format('M d, Y h:i:s A') : 'Recorded' }}
+                                            </td>
+
+                                            <!-- Suspicion Score -->
+                                            <td class="py-3 px-3 text-center">
+                                                <span class="px-2 py-0.5 rounded-full font-mono font-bold bg-gray-100 dark:bg-gray-700 text-gray-800 dark:text-gray-200">
+                                                    +{{ $event->suspicion_score }}
+                                                </span>
+                                            </td>
+
+                                            <!-- Resolution Status -->
+                                            <td class="py-3 px-3">
+                                                @if ($event->isResolved())
+                                                    <span class="inline-flex items-center text-[11px] font-semibold text-emerald-600 dark:text-emerald-400">
+                                                        <svg class="w-3.5 h-3.5 mr-1" fill="currentColor" viewBox="0 0 20 20">
+                                                            <path fill-rule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clip-rule="evenodd"/>
+                                                        </svg>
+                                                        Resolved {{ $event->resolved_at->format('h:i:s A') }}
+                                                    </span>
+                                                @else
+                                                    <span class="inline-flex items-center text-[11px] font-semibold text-rose-600 dark:text-rose-400">
+                                                        <span class="w-1.5 h-1.5 rounded-full bg-rose-500 mr-1.5 animate-pulse"></span>
+                                                        Unresolved
+                                                    </span>
+                                                @endif
+                                            </td>
+
+                                            <!-- Evidence Screenshot -->
+                                            <td class="py-3 px-3 text-right">
+                                                @if ($event->hasEvidence())
+                                                    @php
+                                                        $evidenceUrl = route('teacher.classrooms.tests.evidence.show', [$classroom, $test, $event]);
+                                                    @endphp
+                                                    <button
+                                                        type="button"
+                                                        @click="modalImage = '{{ $evidenceUrl }}'; modalOpen = true"
+                                                        class="inline-flex items-center gap-1.5 px-2.5 py-1 bg-indigo-50 hover:bg-indigo-100 dark:bg-indigo-900/40 dark:hover:bg-indigo-900/60 text-indigo-700 dark:text-indigo-300 rounded-lg font-semibold text-[11px] border border-indigo-200 dark:border-indigo-800 transition"
+                                                    >
+                                                        <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z"></path>
+                                                        </svg>
+                                                        View Image
+                                                    </button>
+                                                @else
+                                                    <span class="text-gray-400 text-[11px] italic">No snapshot</span>
+                                                @endif
+                                            </td>
+                                        </tr>
+                                    @endforeach
+                                </tbody>
+                            </table>
+                        </div>
+                    @else
+                        <div class="py-8 text-center">
+                            <div class="w-12 h-12 bg-emerald-100 dark:bg-emerald-900/40 text-emerald-600 dark:text-emerald-400 rounded-full flex items-center justify-center mx-auto mb-2">
+                                <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"></path>
+                                </svg>
+                            </div>
+                            <h4 class="font-bold text-sm text-gray-800 dark:text-gray-200">Clean Proctoring Record</h4>
+                            <p class="text-xs text-gray-500 dark:text-gray-400 mt-1">
+                                No suspicious events or browser violations were logged during this student's exam attempt.
+                            </p>
+                        </div>
+                    @endif
+                </div>
+            </div>
+
+            <!-- Lightbox Modal for Evidence Screenshots -->
+            <div
+                x-show="modalOpen"
+                x-cloak
+                style="display: none;"
+                class="fixed inset-0 z-50 overflow-y-auto bg-black/80 backdrop-blur-sm flex items-center justify-center p-4"
+                @keydown.escape.window="modalOpen = false"
+            >
+                <div class="bg-white dark:bg-gray-900 rounded-2xl max-w-3xl w-full p-4 overflow-hidden shadow-2xl space-y-3" @click.away="modalOpen = false">
+                    <div class="flex items-center justify-between pb-2 border-b border-gray-200 dark:border-gray-700">
+                        <h4 class="font-bold text-sm text-gray-900 dark:text-gray-100 flex items-center gap-2">
+                            <svg class="w-4 h-4 text-indigo-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 9a2 2 0 012-2h.93a2 2 0 001.664-.89l.812-1.22A2 2 0 0110.07 4h3.86a2 2 0 011.664.89l.812 1.22A2 2 0 0018.07 7H19a2 2 0 012 2v9a2 2 0 01-2 2H5a2 2 0 01-2-2V9z"></path>
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 13a3 3 0 11-6 0 3 3 0 016 0z"></path>
+                            </svg>
+                            Captured Proctoring Frame
+                        </h4>
+                        <button type="button" @click="modalOpen = false" class="text-gray-400 hover:text-gray-600 dark:hover:text-gray-200 text-lg font-bold p-1">
+                            &times;
+                        </button>
+                    </div>
+
+                    <div class="rounded-xl overflow-hidden bg-black flex items-center justify-center aspect-video max-h-[70vh]">
+                        <img :src="modalImage" alt="Captured Evidence Frame" class="w-full h-full object-contain" />
+                    </div>
+
+                    <div class="flex items-center justify-between text-xs text-gray-500 dark:text-gray-400 pt-1">
+                        <span>Protected Evidence Record &bull; SecureTest Proctoring</span>
+                        <button type="button" @click="modalOpen = false" class="px-3 py-1.5 bg-gray-100 hover:bg-gray-200 dark:bg-gray-800 dark:hover:bg-gray-700 rounded-lg font-semibold text-gray-700 dark:text-gray-300">
+                            Close Preview
+                        </button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- SECTION B: Auto-Graded Multiple Choice Questions (MCQ) -->
+            @php
+                $mcqQuestions = $test->questions->filter(fn ($q) => $q->isMcq());
+                $answersByQuestion = $attempt->answers->keyBy('question_id');
+            @endphp
+
+            @if ($mcqQuestions->count() > 0)
+                <div class="bg-white dark:bg-gray-800 rounded-2xl shadow-sm border border-gray-200 dark:border-gray-700 p-6 space-y-4">
+                    <div class="flex items-center justify-between pb-3 border-b border-gray-200 dark:border-gray-700">
+                        <div>
+                            <h3 class="font-bold text-base text-gray-900 dark:text-gray-100">Multiple Choice Questions (Auto-Graded)</h3>
+                            <p class="text-xs text-gray-500 dark:text-gray-400">
+                                System auto-graded against instructor-defined answer keys.
+                            </p>
+                        </div>
+                        <span class="px-3 py-1 rounded-full text-xs font-bold bg-emerald-50 text-emerald-800 dark:bg-emerald-900/30 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800">
+                            {{ $mcqQuestions->count() }} {{ \Illuminate\Support\Str::plural('MCQ', $mcqQuestions->count()) }}
+                        </span>
+                    </div>
+
+                    <div class="space-y-4">
+                        @foreach ($mcqQuestions as $idx => $q)
+                            @php
+                                $ans = $answersByQuestion[$q->id] ?? null;
+                                $isCorrect = $ans ? $ans->is_correct : false;
+                            @endphp
+                            <div class="p-4 rounded-xl border border-gray-200 dark:border-gray-700 bg-gray-50/50 dark:bg-gray-700/20 text-xs space-y-3">
+                                <div class="flex items-start justify-between gap-4">
+                                    <div class="space-y-1">
+                                        <span class="font-bold text-gray-500 uppercase tracking-wider text-[10px]">MCQ Question {{ $idx + 1 }}</span>
+                                        <p class="font-semibold text-sm text-gray-900 dark:text-gray-100 leading-relaxed">{{ $q->question_text }}</p>
+                                    </div>
+                                    <span class="px-2.5 py-1 rounded-lg font-mono font-bold {{ $isCorrect ? 'bg-emerald-100 text-emerald-800 dark:bg-emerald-900/50 dark:text-emerald-300' : 'bg-rose-100 text-rose-800 dark:bg-rose-900/50 dark:text-rose-300' }}">
+                                        {{ $ans ? $ans->marks_awarded : 0 }} / {{ $q->marks }} Marks
+                                    </span>
+                                </div>
+
+                                <div class="grid grid-cols-1 sm:grid-cols-2 gap-2 pt-1">
+                                    @foreach ($q->options as $opt)
+                                        @php
+                                            $isStudentSelected = $ans && $ans->selected_option_id === $opt->id;
+                                            $isCorrectOption = (bool) $opt->is_correct;
+                                        @endphp
+                                        <div class="p-2.5 rounded-lg border text-xs flex items-center justify-between
+                                            {{ $isCorrectOption ? 'border-emerald-500 bg-emerald-50/60 dark:bg-emerald-900/20 text-emerald-900 dark:text-emerald-200' : ($isStudentSelected ? 'border-rose-400 bg-rose-50/60 dark:bg-rose-900/20 text-rose-900 dark:text-rose-200' : 'border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-700 dark:text-gray-300') }}
+                                        ">
+                                            <div class="flex items-center gap-2">
+                                                @if ($isStudentSelected)
+                                                    <span class="w-2 h-2 rounded-full {{ $isCorrectOption ? 'bg-emerald-600' : 'bg-rose-600' }}"></span>
+                                                @else
+                                                    <span class="w-2 h-2 rounded-full bg-gray-300 dark:bg-gray-600"></span>
+                                                @endif
+                                                <span>{{ $opt->option_text }}</span>
+                                            </div>
+
+                                            <div class="flex items-center gap-1 text-[10px] font-bold">
+                                                @if ($isCorrectOption)
+                                                    <span class="text-emerald-700 dark:text-emerald-300 uppercase tracking-wider">&check; Correct Key</span>
+                                                @endif
+                                                @if ($isStudentSelected)
+                                                    <span class="px-1.5 py-0.5 rounded bg-gray-200 dark:bg-gray-700 text-gray-800 dark:text-gray-200">Selected</span>
+                                                @endif
+                                            </div>
+                                        </div>
+                                    @endforeach
+                                </div>
+                            </div>
+                        @endforeach
+                    </div>
+                </div>
+            @endif
+
+            <!-- SECTION C: Faculty Manual Written Answer Grading -->
+            @php
+                $writtenQuestions = $test->questions->filter(fn ($q) => $q->isText());
+            @endphp
+
+            @if ($writtenQuestions->count() > 0)
+                <div class="bg-white dark:bg-gray-800 rounded-2xl shadow-sm border border-gray-200 dark:border-gray-700 p-6 space-y-6">
+                    <div class="flex items-center justify-between pb-3 border-b border-gray-200 dark:border-gray-700">
+                        <div>
+                            <h3 class="font-bold text-base text-gray-900 dark:text-gray-100">Written Responses & Faculty Grading</h3>
+                            <p class="text-xs text-gray-500 dark:text-gray-400">
+                                Review student answers, award marks, and provide individual and overall feedback.
+                            </p>
+                        </div>
+                        <span class="px-3 py-1 rounded-full text-xs font-bold bg-indigo-50 text-indigo-800 dark:bg-indigo-900/30 dark:text-indigo-300 border border-indigo-200 dark:border-indigo-800">
+                            {{ $writtenQuestions->count() }} {{ \Illuminate\Support\Str::plural('Written Question', $writtenQuestions->count()) }}
+                        </span>
+                    </div>
+
+                    <form method="POST" action="{{ route('teacher.classrooms.tests.attempts.save-grades', [$classroom, $test, $attempt]) }}" class="space-y-6">
+                        @csrf
+
+                        @foreach ($writtenQuestions as $wIdx => $wq)
+                            @php
+                                $wAns = $answersByQuestion[$wq->id] ?? null;
+                                $isQuestionGraded = $wAns && $wAns->is_graded;
+                            @endphp
+                            <div class="p-5 rounded-2xl border {{ $isQuestionGraded ? 'border-emerald-300 dark:border-emerald-800 bg-emerald-50/20' : 'border-amber-300 dark:border-amber-800 bg-amber-50/10' }} space-y-4">
+                                <div class="flex items-start justify-between gap-4">
+                                    <div class="space-y-1">
+                                        <div class="flex items-center gap-2">
+                                            <span class="px-2 py-0.5 rounded font-bold text-[10px] uppercase tracking-wider bg-indigo-100 text-indigo-800 dark:bg-indigo-900/50 dark:text-indigo-300">
+                                                Written Question {{ $wIdx + 1 }}
+                                            </span>
+                                            @if ($isQuestionGraded)
+                                                <span class="px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider bg-emerald-100 text-emerald-800 dark:bg-emerald-900/50 dark:text-emerald-300">
+                                                    Graded
+                                                </span>
+                                            @else
+                                                <span class="px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider bg-amber-100 text-amber-800 dark:bg-amber-900/50 dark:text-amber-300">
+                                                    Pending Review
+                                                </span>
+                                            @endif
+                                        </div>
+                                        <h4 class="font-bold text-sm text-gray-900 dark:text-gray-100 mt-1">{{ $wq->question_text }}</h4>
+                                    </div>
+                                    <span class="px-3 py-1 rounded-lg bg-gray-100 dark:bg-gray-700 text-gray-800 dark:text-gray-200 font-mono font-bold text-xs shrink-0">
+                                        Max Marks: {{ $wq->marks }}
+                                    </span>
+                                </div>
+
+                                <!-- Student Typed Answer Display -->
+                                <div class="space-y-1.5">
+                                    <label class="block text-xs font-semibold uppercase tracking-wider text-gray-500 dark:text-gray-400">
+                                        Student Typed Response:
+                                    </label>
+                                    <div class="p-4 bg-white dark:bg-gray-900 rounded-xl border border-gray-200 dark:border-gray-700 text-sm text-gray-800 dark:text-gray-200 leading-relaxed whitespace-pre-wrap font-sans">
+                                        @if ($wAns && !empty($wAns->text_answer))
+                                            {{ $wAns->text_answer }}
+                                        @else
+                                            <span class="text-gray-400 italic">No response submitted for this question.</span>
+                                        @endif
+                                    </div>
+                                </div>
+
+                                <!-- Grading Inputs: Marks & Feedback -->
+                                <div class="grid grid-cols-1 md:grid-cols-3 gap-4 pt-2">
+                                    <div>
+                                        <label for="marks_{{ $wq->id }}" class="block text-xs font-bold text-gray-700 dark:text-gray-300 mb-1">
+                                            Marks Awarded (0 &ndash; {{ $wq->marks }}):
+                                        </label>
+                                        <input
+                                            type="number"
+                                            step="any"
+                                            min="0"
+                                            max="{{ $wq->marks }}"
+                                            id="marks_{{ $wq->id }}"
+                                            name="marks[{{ $wq->id }}]"
+                                            value="{{ old('marks.' . $wq->id, $wAns && $wAns->is_graded ? $wAns->marks_awarded : '') }}"
+                                            placeholder="Enter marks"
+                                            onwheel="this.blur(); event.preventDefault();"
+                                            class="w-full rounded-xl border-gray-300 dark:border-gray-700 dark:bg-gray-900 dark:text-white text-sm focus:ring-indigo-500 focus:border-indigo-500 p-2.5 font-mono font-bold marks-input"
+                                        />
+                                        <p class="text-[11px] text-gray-400 mt-1">Maximum allowed: {{ $wq->marks }} marks</p>
+                                    </div>
+
+                                    <div class="md:col-span-2">
+                                        <label for="feedback_{{ $wq->id }}" class="block text-xs font-bold text-gray-700 dark:text-gray-300 mb-1">
+                                            Question Feedback (Optional):
+                                        </label>
+                                        <input
+                                            type="text"
+                                            id="feedback_{{ $wq->id }}"
+                                            name="feedback[{{ $wq->id }}]"
+                                            value="{{ old('feedback.' . $wq->id, $wAns ? $wAns->teacher_feedback : '') }}"
+                                            placeholder="Constructive feedback or remarks for this answer..."
+                                            class="w-full rounded-xl border-gray-300 dark:border-gray-700 dark:bg-gray-900 dark:text-white text-sm focus:ring-indigo-500 focus:border-indigo-500 p-2.5"
+                                        />
+                                    </div>
+                                </div>
+                            </div>
+                        @endforeach
+
+                        <!-- Overall Feedback Textarea -->
+                        <div class="p-5 bg-gray-50 dark:bg-gray-700/30 rounded-2xl border border-gray-200 dark:border-gray-700 space-y-2">
+                            <label for="overall_feedback" class="block text-xs font-bold uppercase tracking-wider text-gray-700 dark:text-gray-300">
+                                Overall Exam Feedback:
+                            </label>
+                            <textarea
+                                id="overall_feedback"
+                                name="overall_feedback"
+                                rows="3"
+                                placeholder="Write general feedback on the student's performance across the entire exam..."
+                                class="w-full rounded-xl border-gray-300 dark:border-gray-700 dark:bg-gray-900 dark:text-white text-sm focus:ring-indigo-500 focus:border-indigo-500 p-3"
+                            >{{ old('overall_feedback', $attempt->teacher_feedback) }}</textarea>
+                            <p class="text-[11px] text-gray-400">
+                                This feedback will be displayed to the student once all questions have been reviewed and finalized.
+                            </p>
+                        </div>
+
+                        <!-- Action Button -->
+                        <div class="flex items-center justify-between pt-2">
+                            <a href="{{ route('teacher.classrooms.tests.results', [$classroom, $test]) }}" class="text-xs font-semibold text-gray-500 hover:text-gray-700 dark:text-gray-400">
+                                &larr; Return to results list without saving
+                            </a>
+                            <button
+                                type="submit"
+                                class="inline-flex items-center px-6 py-3 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl font-bold text-sm shadow-md hover:shadow-lg transition transform hover:-translate-y-0.5"
+                            >
+                                <svg class="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"></path>
+                                </svg>
+                                Save Grades & Feedback
+                            </button>
+                        </div>
+                    </form>
+                </div>
+            @endif
+
+            <!-- SECTION C: Teacher Negative Marks & Deduction Audit -->
+            <div class="bg-white dark:bg-gray-800 rounded-2xl shadow-sm border border-gray-200 dark:border-gray-700 p-6 space-y-4">
+                <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 pb-4 border-b border-gray-200 dark:border-gray-700">
+                    <div>
+                        <h3 class="font-bold text-base text-gray-900 dark:text-gray-100 flex items-center gap-2">
+                            <span class="w-2.5 h-2.5 rounded-full bg-rose-500"></span>
+                            Teacher-Controlled Negative Marks & Deductions
+                        </h3>
+                        <p class="text-xs text-gray-500 dark:text-gray-400 mt-1">
+                            Preserve original exam score and apply audited penalty deductions. Final Marks = Exam Marks &minus; Negative Marks.
+                        </p>
+                    </div>
+                    <div class="flex items-center gap-3 text-xs font-mono">
+                        <div class="p-2 bg-gray-50 dark:bg-gray-700/40 rounded-lg">
+                            <span class="text-gray-400">Exam Marks:</span>
+                            <strong class="text-gray-900 dark:text-gray-100">{{ $attempt->score }}</strong>
+                        </div>
+                        <div class="p-2 bg-rose-50 dark:bg-rose-900/30 rounded-lg text-rose-700 dark:text-rose-300">
+                            <span>Negative:</span>
+                            <strong>-{{ $attempt->negative_marks }}</strong>
+                        </div>
+                        <div class="p-2 bg-emerald-50 dark:bg-emerald-900/30 rounded-lg text-emerald-700 dark:text-emerald-300">
+                            <span>Final Marks:</span>
+                            <strong>{{ $attempt->final_marks }}</strong>
+                        </div>
+                    </div>
+                </div>
+
+                <form action="{{ route('teacher.classrooms.tests.attempts.negative-marks', [$classroom, $test, $attempt]) }}" method="POST" class="grid grid-cols-1 md:grid-cols-4 gap-4 items-end">
+                    @csrf
+                    <div>
+                        <label for="negative_marks" class="block text-xs font-bold text-gray-700 dark:text-gray-300 mb-1">
+                            Negative Marks (0 &ndash; {{ $attempt->score }}):
+                        </label>
+                        <input
+                            type="number"
+                            step="any"
+                            min="0"
+                            max="{{ $attempt->score }}"
+                            id="negative_marks"
+                            name="negative_marks"
+                            value="{{ old('negative_marks', $attempt->negative_marks) }}"
+                            required
+                            onwheel="this.blur(); event.preventDefault();"
+                            class="w-full rounded-xl border-gray-300 dark:border-gray-700 dark:bg-gray-900 dark:text-white text-sm focus:ring-rose-500 focus:border-rose-500 p-2.5 font-mono font-bold marks-input"
+                        />
+                    </div>
+                    <div class="md:col-span-2">
+                        <label for="reason" class="block text-xs font-bold text-gray-700 dark:text-gray-300 mb-1">
+                            Reason / Audit Explanation (Required):
+                        </label>
+                        <input
+                            type="text"
+                            id="reason"
+                            name="reason"
+                            value="{{ old('reason', $attempt->negative_marks_reason) }}"
+                            required
+                            placeholder="Enter specific audit reason for deduction..."
+                            class="w-full rounded-xl border-gray-300 dark:border-gray-700 dark:bg-gray-900 dark:text-white text-sm focus:ring-rose-500 focus:border-rose-500 p-2.5"
+                        />
+                    </div>
+                    <div>
+                        <button
+                            type="submit"
+                            class="w-full px-4 py-2.5 bg-rose-600 hover:bg-rose-700 text-white rounded-xl font-bold text-xs shadow-sm transition"
+                        >
+                            Apply Deduction & Audit
+                        </button>
+                    </div>
+                </form>
+
+                @if ($attempt->markDeductionAudits->count() > 0)
+                    <div class="pt-3 border-t border-gray-100 dark:border-gray-700 space-y-2">
+                        <h4 class="text-xs font-bold uppercase tracking-wider text-gray-500 dark:text-gray-400">
+                            Deduction Audit Trail ({{ $attempt->markDeductionAudits->count() }})
+                        </h4>
+                        <div class="divide-y divide-gray-100 dark:divide-gray-700 text-xs">
+                            @foreach ($attempt->markDeductionAudits as $audit)
+                                <div class="py-2 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-1 text-[11px]">
+                                    <div>
+                                        <span class="font-bold text-gray-800 dark:text-gray-200">{{ $audit->teacher->name }}</span>
+                                        <span class="text-gray-400">adjusted deduction to </span>
+                                        <span class="font-mono font-bold text-rose-600">-{{ $audit->negative_marks }} marks</span>
+                                        <span class="text-gray-400">&bull; Resulting Final Marks: </span>
+                                        <span class="font-mono font-bold text-emerald-600">{{ $audit->final_marks }}</span>
+                                        <p class="text-gray-600 dark:text-gray-300 mt-0.5 italic">&ldquo;{{ $audit->reason }}&rdquo;</p>
+                                    </div>
+                                    <span class="text-gray-400 shrink-0">{{ $audit->created_at->format('M d, Y h:i A') }}</span>
+                                </div>
+                            @endforeach
+                        </div>
+                    </div>
+                @endif
+            </div>
+
+        </div>
+    </div>
+
+    <script>
+        document.addEventListener('DOMContentLoaded', function () {
+            // Suppress mouse-wheel scrolling on marks input fields to prevent accidental mark increments/decrements
+            const marksInputs = document.querySelectorAll('input[name^="marks["], input[name="negative_marks"], .marks-input');
+            marksInputs.forEach(function (input) {
+                input.addEventListener('wheel', function (e) {
+                    e.preventDefault();
+                    this.blur();
+                }, { passive: false });
+            });
+        });
+    </script>
+</x-app-layout>

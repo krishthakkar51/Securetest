@@ -1,0 +1,351 @@
+// tests/js/eye_gaze_tracker.test.cjs
+
+const assert = require('assert');
+
+class EyeGazeTracker {
+    constructor(options = {}) {
+        this.onEvent = options.onEvent || (() => {});
+        this.onStatusChange = options.onStatusChange || (() => {});
+        this.now = options.now || (() => Date.now()); // Injectable clock for deterministic tests
+
+        // Threshold configurations
+        this.GAZE_DURATION_THRESHOLD = 2000;       // 2.0s continuous
+        this.EYES_UNDETECTED_THRESHOLD = 3000;     // > 3.0s continuous
+        this.EYES_COVERED_THRESHOLD = 3000;        // > 3.0s continuous
+        this.NORMAL_STABILITY_REQUIRED = 1500;     // 1.5s normal stability to confirm new incident eligibility
+        this.NORMAL_BLINK_MAX_DURATION = 500;      // < 500ms normal blink window
+
+        // Gaze boundary definitions
+        this.CENTER_X_MIN = 0.30;
+        this.CENTER_X_MAX = 0.70;
+        this.CENTER_Y_MIN = 0.22;
+        this.CENTER_Y_MAX = 0.80;
+
+        // Active detection timers (reset IMMEDIATELY when abnormal condition ends)
+        this.gazeTimerStart = null;
+        this.gazeLockedDirection = null;
+
+        this.eyesUndetectedTimerStart = null;
+        this.eyesCoveredTimerStart = null;
+
+        this.blinkTimerStart = null;
+
+        // Incident-based latching (prevents duplicate screenshots during same incident)
+        this.gazeIncidentLatched = false;
+        this.eyesUndetectedIncidentLatched = false;
+        this.eyesCoveredIncidentLatched = false;
+
+        // Normal-stability tracking (for confirming eligibility for a genuinely new incident)
+        this.gazeNormalStartTime = null;
+        this.eyesNormalStartTime = null;
+
+        // Status tracking
+        this.currentStatus = 'Centered';
+    }
+
+    classifyGazeDirection(avgGazeX, avgGazeY) {
+        let hDev = 0;
+        let hDir = null;
+        if (avgGazeX < this.CENTER_X_MIN) {
+            hDev = (this.CENTER_X_MIN - avgGazeX) / this.CENTER_X_MIN;
+            hDir = 'left';
+        } else if (avgGazeX > this.CENTER_X_MAX) {
+            hDev = (avgGazeX - this.CENTER_X_MAX) / 0.30;
+            hDir = 'right';
+        }
+
+        let vDev = 0;
+        let vDir = null;
+        if (avgGazeY < this.CENTER_Y_MIN) {
+            vDev = (this.CENTER_Y_MIN - avgGazeY) / this.CENTER_Y_MIN;
+            vDir = 'up';
+        } else if (avgGazeY > this.CENTER_Y_MAX) {
+            vDev = (avgGazeY - this.CENTER_Y_MAX) / 0.20;
+            vDir = 'down';
+        }
+
+        if (hDev === 0 && vDev === 0) {
+            return null;
+        }
+
+        if (hDev >= vDev) {
+            return hDir;
+        } else {
+            return vDir;
+        }
+    }
+
+    processFrame(input) {
+        const currentTime = this.now();
+
+        if (!input.faceDetected) {
+            this.resetAllTimers();
+            return;
+        }
+
+        // 1. BLINK DURATION TRACKING (Rule 4)
+        if (input.landmarksPresent && input.isEyeClosed) {
+            if (this.blinkTimerStart === null) {
+                this.blinkTimerStart = currentTime;
+            }
+            const blinkDuration = currentTime - this.blinkTimerStart;
+
+            if (blinkDuration < this.NORMAL_BLINK_MAX_DURATION) {
+                // NORMAL BLINK: under 500ms
+                this.gazeTimerStart = null;
+                this.gazeLockedDirection = null;
+                this.eyesUndetectedTimerStart = null;
+                this.eyesCoveredTimerStart = null;
+
+                this.setStatus('Blinking');
+                return;
+            }
+            // If blinkDuration >= 500ms, transitions out of normal blink to eye closure
+        } else {
+            this.blinkTimerStart = null;
+        }
+
+        // 2. EYE VISIBILITY & OCCLUSION (Rules 2 & 3)
+        const eyesAreVisibleAndOpen = input.landmarksPresent && !input.isEyeClosed && input.avgGazeX !== null && input.avgGazeY !== null;
+
+        if (!eyesAreVisibleAndOpen) {
+            this.gazeTimerStart = null;
+            this.gazeLockedDirection = null;
+
+            if (input.handOverEyesDetected) {
+                // RULE 3: Verified Hand / Object Occlusion
+                this.eyesUndetectedTimerStart = null;
+
+                if (this.eyesCoveredTimerStart === null) {
+                    this.eyesCoveredTimerStart = currentTime;
+                }
+
+                const coveredDuration = currentTime - this.eyesCoveredTimerStart;
+
+                if (coveredDuration > this.EYES_COVERED_THRESHOLD) {
+                    if (!this.eyesCoveredIncidentLatched) {
+                        this.eyesCoveredIncidentLatched = true;
+                        this.onEvent('eyes_covered_object', 'Both eyes covered by object for more than 3 seconds.');
+                    }
+                }
+                this.setStatus('Eyes Covered');
+            } else {
+                // RULE 2: Face visible, but eyes undetected (closure or landmark failure)
+                this.eyesCoveredTimerStart = null;
+
+                if (this.eyesUndetectedTimerStart === null) {
+                    this.eyesUndetectedTimerStart = currentTime;
+                }
+
+                const undetectedDuration = currentTime - this.eyesUndetectedTimerStart;
+
+                if (undetectedDuration > this.EYES_UNDETECTED_THRESHOLD) {
+                    if (!this.eyesUndetectedIncidentLatched) {
+                        this.eyesUndetectedIncidentLatched = true;
+                        this.onEvent('eyes_not_detected', 'Face visible but both eyes undetected for more than 3 seconds.');
+                    }
+                }
+                this.setStatus('Eyes Undetected');
+            }
+
+            this.eyesNormalStartTime = null;
+            return;
+        }
+
+        // Eyes are detected and open: reset undetected & covered timers IMMEDIATELY
+        this.eyesUndetectedTimerStart = null;
+        this.eyesCoveredTimerStart = null;
+
+        if (this.eyesNormalStartTime === null) {
+            this.eyesNormalStartTime = currentTime;
+        } else if (currentTime - this.eyesNormalStartTime >= this.NORMAL_STABILITY_REQUIRED) {
+            this.eyesUndetectedIncidentLatched = false;
+            this.eyesCoveredIncidentLatched = false;
+        }
+
+        // 3. SUSTAINED DIRECTIONAL GAZE (Rule 1)
+        const direction = this.classifyGazeDirection(input.avgGazeX, input.avgGazeY);
+
+        if (direction !== null) {
+            this.gazeNormalStartTime = null;
+
+            if (this.gazeTimerStart === null) {
+                this.gazeTimerStart = currentTime;
+                this.gazeLockedDirection = direction;
+            }
+
+            const gazeDuration = currentTime - this.gazeTimerStart;
+
+            if (gazeDuration >= this.GAZE_DURATION_THRESHOLD) {
+                if (!this.gazeIncidentLatched) {
+                    this.gazeIncidentLatched = true;
+                    const eventType = `gaze_away_${this.gazeLockedDirection}`;
+                    const dirName = this.gazeLockedDirection.toUpperCase();
+                    this.onEvent(eventType, `Sustained eye gaze away from screen (${dirName}) for 2+ seconds.`);
+                }
+            }
+
+            this.setStatus(`Gaze: ${this.gazeLockedDirection.charAt(0).toUpperCase() + this.gazeLockedDirection.slice(1)}`);
+        } else {
+            // Centered
+            this.gazeTimerStart = null;
+            this.gazeLockedDirection = null;
+
+            if (this.gazeNormalStartTime === null) {
+                this.gazeNormalStartTime = currentTime;
+            } else if (currentTime - this.gazeNormalStartTime >= this.NORMAL_STABILITY_REQUIRED) {
+                this.gazeIncidentLatched = false;
+            }
+
+            this.setStatus('Centered');
+        }
+    }
+
+    resetAllTimers() {
+        this.gazeTimerStart = null;
+        this.gazeLockedDirection = null;
+        this.eyesUndetectedTimerStart = null;
+        this.eyesCoveredTimerStart = null;
+        this.blinkTimerStart = null;
+        this.gazeNormalStartTime = null;
+        this.eyesNormalStartTime = null;
+    }
+
+    setStatus(status) {
+        if (this.currentStatus !== status) {
+            this.currentStatus = status;
+            this.onStatusChange(status);
+        }
+    }
+}
+
+// ============================================
+// SUITE OF AUTOMATED TESTS WITH FAKE CLOCK
+// ============================================
+function runAllTests() {
+    let mockTime = 10000;
+    const events = [];
+    const tracker = new EyeGazeTracker({
+        now: () => mockTime,
+        onEvent: (type, desc) => events.push({ type, desc, time: mockTime })
+    });
+
+    console.log('Running EyeGazeTracker automated unit tests...');
+
+    // Test 1: Normal center gaze produces Centered status and 0 events
+    tracker.processFrame({ faceDetected: true, landmarksPresent: true, isEyeClosed: false, avgGazeX: 0.50, avgGazeY: 0.50, handOverEyesDetected: false });
+    assert.strictEqual(tracker.currentStatus, 'Centered');
+    assert.strictEqual(events.length, 0);
+
+    // Test 2: Directional Gaze Left reaches 2.0s -> generates gaze_away_left
+    mockTime += 100;
+    tracker.processFrame({ faceDetected: true, landmarksPresent: true, isEyeClosed: false, avgGazeX: 0.15, avgGazeY: 0.50, handOverEyesDetected: false });
+    assert.strictEqual(tracker.currentStatus, 'Gaze: Left');
+    assert.strictEqual(events.length, 0); // At 100ms, no event
+
+    mockTime += 1900; // Total 1900ms looking left
+    tracker.processFrame({ faceDetected: true, landmarksPresent: true, isEyeClosed: false, avgGazeX: 0.15, avgGazeY: 0.50, handOverEyesDetected: false });
+    assert.strictEqual(events.length, 0); // Not reached 2000ms yet
+
+    mockTime += 100; // Total 2000ms looking left
+    tracker.processFrame({ faceDetected: true, landmarksPresent: true, isEyeClosed: false, avgGazeX: 0.15, avgGazeY: 0.50, handOverEyesDetected: false });
+    assert.strictEqual(events.length, 1);
+    assert.strictEqual(events[0].type, 'gaze_away_left');
+
+    // Test 3: Continuation of same incident for another 5000ms produces NO duplicate events
+    mockTime += 5000;
+    tracker.processFrame({ faceDetected: true, landmarksPresent: true, isEyeClosed: false, avgGazeX: 0.15, avgGazeY: 0.50, handOverEyesDetected: false });
+    assert.strictEqual(events.length, 1, 'Duplicate screenshot prevented for same incident');
+
+    // Test 4: Return to center resets active timer IMMEDIATELY
+    mockTime += 100;
+    tracker.processFrame({ faceDetected: true, landmarksPresent: true, isEyeClosed: false, avgGazeX: 0.50, avgGazeY: 0.50, handOverEyesDetected: false });
+    assert.strictEqual(tracker.gazeTimerStart, null, 'Active gaze timer reset immediately');
+    assert.strictEqual(tracker.currentStatus, 'Centered');
+
+    // Test 5: New incident after 1.5s normal stability
+    mockTime += 1600; // 1.6s of normal stability
+    tracker.processFrame({ faceDetected: true, landmarksPresent: true, isEyeClosed: false, avgGazeX: 0.50, avgGazeY: 0.50, handOverEyesDetected: false });
+    assert.strictEqual(tracker.gazeIncidentLatched, false, 'Latch cleared after 1.5s normal stability');
+
+    // Start new incident: Looking Right for 2.0s
+    mockTime += 100;
+    tracker.processFrame({ faceDetected: true, landmarksPresent: true, isEyeClosed: false, avgGazeX: 0.85, avgGazeY: 0.50, handOverEyesDetected: false });
+    assert.strictEqual(tracker.currentStatus, 'Gaze: Right');
+
+    mockTime += 2000;
+    tracker.processFrame({ faceDetected: true, landmarksPresent: true, isEyeClosed: false, avgGazeX: 0.85, avgGazeY: 0.50, handOverEyesDetected: false });
+    assert.strictEqual(events.length, 2);
+    assert.strictEqual(events[1].type, 'gaze_away_right');
+
+    // Return to center
+    mockTime += 1600;
+    tracker.processFrame({ faceDetected: true, landmarksPresent: true, isEyeClosed: false, avgGazeX: 0.50, avgGazeY: 0.50, handOverEyesDetected: false });
+
+    // Test 6: Normal Blink under 500ms does NOT trigger any alert
+    mockTime += 100;
+    tracker.processFrame({ faceDetected: true, landmarksPresent: true, isEyeClosed: true, avgGazeX: 0.50, avgGazeY: 0.50, handOverEyesDetected: false });
+    assert.strictEqual(tracker.currentStatus, 'Blinking');
+    mockTime += 300; // 300ms blink
+    tracker.processFrame({ faceDetected: true, landmarksPresent: true, isEyeClosed: true, avgGazeX: 0.50, avgGazeY: 0.50, handOverEyesDetected: false });
+    assert.strictEqual(tracker.currentStatus, 'Blinking');
+    assert.strictEqual(events.length, 2, 'No event triggered during normal blink');
+
+    // Eyes open after blink
+    mockTime += 50;
+    tracker.processFrame({ faceDetected: true, landmarksPresent: true, isEyeClosed: false, avgGazeX: 0.50, avgGazeY: 0.50, handOverEyesDetected: false });
+    assert.strictEqual(tracker.currentStatus, 'Centered');
+
+    // Test 7: Eyes undetected for > 3.0s (e.g. 3100ms) without hand -> triggers eyes_not_detected
+    mockTime += 1600; // Stabilize
+    tracker.processFrame({ faceDetected: true, landmarksPresent: true, isEyeClosed: false, avgGazeX: 0.50, avgGazeY: 0.50, handOverEyesDetected: false });
+
+    mockTime += 100;
+    tracker.processFrame({ faceDetected: true, landmarksPresent: false, isEyeClosed: false, avgGazeX: null, avgGazeY: null, handOverEyesDetected: false });
+    assert.strictEqual(tracker.currentStatus, 'Eyes Undetected');
+
+    mockTime += 2800; // Total 2800ms
+    tracker.processFrame({ faceDetected: true, landmarksPresent: false, isEyeClosed: false, avgGazeX: null, avgGazeY: null, handOverEyesDetected: false });
+    assert.strictEqual(events.length, 2, 'No event before 3.0s');
+
+    mockTime += 300; // Total 3100ms (> 3000ms)
+    tracker.processFrame({ faceDetected: true, landmarksPresent: false, isEyeClosed: false, avgGazeX: null, avgGazeY: null, handOverEyesDetected: false });
+    assert.strictEqual(events.length, 3);
+    assert.strictEqual(events[2].type, 'eyes_not_detected');
+
+    // Return to visible eyes
+    mockTime += 1600;
+    tracker.processFrame({ faceDetected: true, landmarksPresent: true, isEyeClosed: false, avgGazeX: 0.50, avgGazeY: 0.50, handOverEyesDetected: false });
+
+    // Test 8: Both eyes covered by hand for > 3.0s -> triggers eyes_covered_object
+    mockTime += 100;
+    tracker.processFrame({ faceDetected: true, landmarksPresent: false, isEyeClosed: false, avgGazeX: null, avgGazeY: null, handOverEyesDetected: true });
+    assert.strictEqual(tracker.currentStatus, 'Eyes Covered');
+
+    mockTime += 3100;
+    tracker.processFrame({ faceDetected: true, landmarksPresent: false, isEyeClosed: false, avgGazeX: null, avgGazeY: null, handOverEyesDetected: true });
+    assert.strictEqual(events.length, 4);
+    assert.strictEqual(events[3].type, 'eyes_covered_object');
+
+    // Test 9: Diagonal priority normalization
+    // Case A: avgGazeX = 0.10 (hDev = (0.30 - 0.10)/0.30 = 0.667), avgGazeY = 0.18 (vDev = (0.22 - 0.18)/0.22 = 0.182)
+    // hDev (0.667) > vDev (0.182) -> left
+    assert.strictEqual(tracker.classifyGazeDirection(0.10, 0.18), 'left');
+
+    // Case B: avgGazeX = 0.28 (hDev = (0.30 - 0.28)/0.30 = 0.067), avgGazeY = 0.95 (vDev = (0.95 - 0.80)/0.20 = 0.75)
+    // vDev (0.75) > hDev (0.067) -> down
+    assert.strictEqual(tracker.classifyGazeDirection(0.28, 0.95), 'down');
+
+    // Case C: avgGazeX = 0.90 (hDev = (0.90 - 0.70)/0.30 = 0.667), avgGazeY = 0.10 (vDev = (0.22 - 0.10)/0.22 = 0.545)
+    // hDev (0.667) > vDev (0.545) -> right
+    assert.strictEqual(tracker.classifyGazeDirection(0.90, 0.10), 'right');
+
+    // Case D: avgGazeX = 0.75 (hDev = (0.75 - 0.70)/0.30 = 0.167), avgGazeY = 0.05 (vDev = (0.22 - 0.05)/0.22 = 0.773)
+    // vDev (0.773) > hDev (0.167) -> up
+    assert.strictEqual(tracker.classifyGazeDirection(0.75, 0.05), 'up');
+
+    console.log('ALL 9 AUTOMATED FRONTEND LOGIC TESTS PASSED SUCCESSFULLY!');
+}
+
+runAllTests();
+module.exports = { EyeGazeTracker };

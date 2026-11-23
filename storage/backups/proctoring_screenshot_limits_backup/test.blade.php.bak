@@ -1,0 +1,1223 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+    <title>SecureTest</title>
+
+    <meta name="csrf-token" content="{{ csrf_token() }}">
+    <meta name="auth-check" content="1">
+
+    @vite(['resources/css/app.css', 'resources/js/app.js'])
+</head>
+
+<body>
+
+    <div id="examContent">
+
+        <h1>SecureTest</h1>
+
+        <p>Test Page</p>
+
+        <p id="status">
+            You are currently on the test page.
+        </p>
+
+        <!-- Webcam -->
+        <video
+            id="webcam"
+            width="400"
+            autoplay
+            playsinline
+            muted
+        ></video>
+
+        <p id="cameraStatus">
+            Camera is not started.
+        </p>
+        <p id="faceStatus">
+        Face detection is not started.
+        </p>
+<p id="gazeStatus">
+    Eye Gaze: Waiting...
+</p>
+        <p id="score">
+            Suspicion Score: 0
+        </p>
+
+        <!-- Start Test -->
+        <button id="startTest">
+            Start Test
+        </button>
+
+        <!-- Temporary input for testing copy/paste -->
+        <input
+            type="text"
+            id="testInput"
+            placeholder="Temporary test input"
+            style="display: none;"
+        >
+
+    </div>
+
+
+    <!-- Fullscreen Warning -->
+    <div id="fullscreenWarning" style="display: none;">
+
+        <p id="fullscreenMessage"></p>
+
+        <button id="returnFullscreen">
+            Return to Fullscreen
+        </button>
+
+    </div>
+
+    <script>
+
+        // =========================================
+        // START TEST / ENTER FULLSCREEN
+        // =========================================
+
+        const startTestButton =
+            document.getElementById('startTest');
+        const examContent =
+            document.getElementById('examContent');
+        const testInput =
+            document.getElementById('testInput');
+
+        startTestButton.addEventListener('click', async function () {
+
+            try {
+
+    const cameraStarted = await startCamera();
+
+    if (!cameraStarted) {
+
+        alert(
+            'Camera access is required to start the test.'
+        );
+
+        return;
+
+    }
+
+    await document.documentElement.requestFullscreen();
+
+    console.log(
+        'Fullscreen started successfully.'
+    );
+                // Show input after fullscreen starts
+                testInput.style.display = 'block';
+
+                // Hide Start Test button
+                startTestButton.style.display = 'none';
+
+            } catch (error) {
+
+                console.error(
+                    'Fullscreen request failed:',
+                    error
+                );
+
+            }
+
+        });
+
+
+        // =========================================
+        // FULLSCREEN EXIT DETECTION + TIMER
+        // =========================================
+
+        let fullscreenExitCount = 0;
+
+        let fullscreenTimer = null;
+
+        let remainingSeconds = 15;
+
+        const fullscreenWarning =
+            document.getElementById('fullscreenWarning');
+
+        const fullscreenMessage =
+            document.getElementById('fullscreenMessage');
+
+        const returnFullscreenButton =
+            document.getElementById('returnFullscreen');
+
+
+        document.addEventListener('fullscreenchange', function () {
+
+            // Fullscreen was exited
+            if (!document.fullscreenElement) {
+                examContent.style.display = 'none';
+                fullscreenExitCount++;
+              
+
+                const exitTime = new Date();
+
+                console.log(
+                    'Fullscreen exit detected:',
+                    exitTime.toISOString()
+                );
+
+                console.log(
+                    'Fullscreen exit count:',
+                    fullscreenExitCount
+                );
+
+                fetch('/cheating-event', {
+
+        method: 'POST',
+
+        headers: {
+            'Content-Type': 'application/json',
+
+            'X-CSRF-TOKEN':
+                document.querySelector(
+                    'meta[name="csrf-token"]'
+                ).content,
+
+            'Accept': 'application/json'
+        },
+
+        body: JSON.stringify({
+
+            event_type: 'fullscreen_exit',
+
+            suspicion_score: 5
+
+        })
+
+    })
+
+    .then(response => response.json())
+
+    .then(data => {
+
+        console.log(
+            'Fullscreen exit event stored:',
+            data
+        );
+
+        console.log(
+            'Current total SPS:',
+            data.total_score
+        );
+
+    })
+
+    .catch(error => {
+
+        console.error(
+            'Error storing fullscreen exit:',
+            error
+        );
+
+    });
+                // Show warning
+                fullscreenWarning.style.display = 'block';
+
+
+                // Reset timer
+                remainingSeconds = 15;
+
+
+                fullscreenMessage.textContent =
+                    'Fullscreen exited. Please return to fullscreen. Time remaining: ' +
+                    remainingSeconds +
+                    ' seconds';
+
+
+                // Clear any previous timer
+                clearInterval(fullscreenTimer);
+
+
+                // Start 15 second countdown
+                fullscreenTimer = setInterval(function () {
+
+                    remainingSeconds--;
+
+
+                    fullscreenMessage.textContent =
+                        'Fullscreen exited. Please return to fullscreen. Time remaining: ' +
+                        remainingSeconds +
+                        ' seconds';
+
+
+                    // Timer finished
+                    if (remainingSeconds <= 0) {
+
+                        clearInterval(fullscreenTimer);
+
+
+                        fullscreenMessage.textContent =
+                            'Grace period expired. Fullscreen was not restored.';
+
+
+                        console.log(
+                            'Fullscreen grace period expired.'
+                        );
+
+                    }
+
+                }, 1000);
+
+            }
+
+        });
+
+
+        // =========================================
+        // RETURN TO FULLSCREEN BUTTON
+        // =========================================
+
+        returnFullscreenButton.addEventListener(
+            'click',
+            async function () {
+
+                try {
+                    const cameraStarted = await startCamera();
+
+                    if (!cameraStarted) {
+
+                   alert(
+                   'Camera access is required to continue the test.'
+                      );
+
+                      return;
+
+                    }
+                    await document.documentElement.requestFullscreen();
+                    examContent.style.display = 'block';
+
+                    // Stop timer
+                    clearInterval(fullscreenTimer);
+
+
+                    // Hide warning
+                    fullscreenWarning.style.display = 'none';
+
+
+                    console.log(
+                        'Fullscreen restored.'
+                    );
+
+                } catch (error) {
+
+                    console.error(
+                        'Unable to restore fullscreen:',
+                        error
+                    );
+
+                }
+
+            }
+        );
+
+
+        // =========================================
+        // TAB SWITCH DETECTION
+        // =========================================
+
+        document.addEventListener(
+            'visibilitychange',
+            function () {
+
+                if (document.hidden) {
+
+                    console.log(
+                        'Tab switch detected at:',
+                        new Date().toLocaleString()
+                    );
+
+
+                    fetch('/cheating-event', {
+
+                        method: 'POST',
+
+                        headers: {
+
+                            'Content-Type':
+                                'application/json',
+
+                            'X-CSRF-TOKEN':
+                                document.querySelector(
+                                    'meta[name="csrf-token"]'
+                                ).content,
+
+                            'Accept':
+                                'application/json'
+
+                        },
+
+                        body: JSON.stringify({
+
+                            event_type:
+                                'tab_switch',
+
+                            suspicion_score:
+                                1
+
+                        })
+
+                    })
+
+                    .then(response =>
+                        response.json()
+                    )
+
+                    .then(data => {
+
+                        console.log(
+                            'Event stored:',
+                            data
+                        );
+
+                        console.log(
+                            'Current suspicion score:',
+                            data.total_score
+                        );
+
+
+                        document.getElementById(
+                            'score'
+                        ).textContent =
+                            'Suspicion Score: ' +
+                            (data.total_score ?? 0);
+
+                    })
+
+                    .catch(error => {
+
+                        console.error(
+                            'Error storing event:',
+                            error
+                        );
+
+                    });
+
+                }
+
+            }
+        );
+
+
+// =========================================
+// COPY BLOCK
+// =========================================
+
+document.addEventListener('copy', function (event) {
+
+    event.preventDefault();
+
+    console.log(
+        'Copy blocked in SecureTest.'
+    );
+
+});
+
+ // =========================================
+// PASTE BLOCK
+// =========================================
+
+document.addEventListener('paste', function (event) {
+
+    event.preventDefault();
+
+    console.log(
+        'Paste blocked in SecureTest.'
+    );
+
+});
+
+// =========================================
+// WEBCAM ACCESS
+// =========================================
+
+const webcam = document.getElementById('webcam');
+const cameraStatus = document.getElementById('cameraStatus');
+
+async function startCamera() {
+
+    try {
+
+        const stream = await navigator.mediaDevices.getUserMedia({
+            video: true,
+            audio: false
+        });
+
+       webcam.srcObject = stream;
+
+const videoTrack = stream.getVideoTracks()[0];
+
+videoTrack.onended = function () {
+
+    console.log(
+        'Camera stopped or disconnected.'
+    );
+
+    cameraStatus.textContent =
+        'Camera is required to continue the test.';
+
+    examContent.style.display = 'none';
+
+    fullscreenWarning.style.display = 'block';
+
+    fullscreenMessage.textContent =
+        'Camera access is required to continue the test.';
+
+};
+
+        cameraStatus.textContent =
+            'Camera is active.';
+
+        console.log(
+            'Camera started successfully.'
+        );
+
+        startFaceDetection();
+        detectEyeLandmarks();
+        return true;
+
+    } catch (error) {
+
+        cameraStatus.textContent =
+            'Camera access is required to start the test.';
+
+        console.error(
+            'Camera access failed:',
+            error
+        );
+
+        return false;
+
+    }
+
+}
+
+// =========================================
+// FACE DETECTION
+// =========================================
+
+const faceStatus =
+    document.getElementById('faceStatus');
+
+
+        // FACE DETECTION EVENT TRACKING
+
+
+        let noFaceStartTime = null;
+        let multipleFaceStartTime = null;
+        let currentFaceCount = -1;
+
+        let noFaceEventSent = false;
+        let multipleFaceEventSent = false;
+        let faceEventActive = false;
+
+        const NO_FACE_CONFIRMATION_TIME = 2000;
+        const MULTIPLE_FACE_CONFIRMATION_TIME = 2000;
+
+
+async function startFaceDetection() {
+
+    console.log(
+        'Waiting for MediaPipe Face Detector...'
+    );
+
+    while (!window.faceDetector) {
+
+        await new Promise(
+            resolve => setTimeout(resolve, 100)
+        );
+
+    }
+
+    console.log(
+        'Face Detector is available.'
+    );
+
+    faceStatus.textContent =
+        'Face detection active.';
+
+    faceDetectionRunning = true;
+
+    detectFaces();
+}
+
+
+function detectFaces() {
+
+    if (!faceDetectionRunning) {
+        return;
+    }
+
+    if (
+        !webcam.videoWidth ||
+        !webcam.videoHeight
+    ) {
+
+        requestAnimationFrame(
+            detectFaces
+        );
+
+        return;
+    }
+
+    try {
+
+        const timestamp =
+            performance.now();
+
+        const result =
+            window.faceDetector.detectForVideo(
+                webcam,
+                timestamp
+            );
+
+        const detections =
+            result.detections || [];
+
+        const faceCount =
+            detections.length;
+        currentFaceCount = faceCount;
+
+
+        // =====================================
+        // NO FACE
+        // =====================================
+
+        if (faceCount === 0) {
+
+            faceStatus.textContent =
+                '⚠️ No face detected';
+
+
+            // Start no-face timer
+            if (noFaceStartTime === null) {
+
+                noFaceStartTime =
+                    Date.now();
+
+            }
+
+
+            // Reset multiple-face tracking
+            multipleFaceStartTime = null;
+            multipleFaceEventSent = false;
+
+
+            // Check confirmation time
+            const noFaceDuration =
+                Date.now() - noFaceStartTime;
+
+
+           if (
+            noFaceDuration >=
+            NO_FACE_CONFIRMATION_TIME &&
+            !noFaceEventSent
+             ) {
+
+            noFaceEventSent = true;
+
+            faceEventActive = true;
+
+            sendFaceEvent(
+                'no_face_detected'
+            );
+
+        }
+
+        }
+
+
+        // =====================================
+        // ONE FACE
+        // =====================================
+
+        else if (faceCount === 1) {
+
+            faceStatus.textContent =
+                '✅ 1 face detected';
+
+
+            // Resolve previous face detection event
+            if (faceEventActive) {
+
+                sendFaceEvent(
+                    'face_normal'
+                );
+
+                faceEventActive = false;
+
+            }
+
+
+            // Reset no-face tracking
+            noFaceStartTime = null;
+            noFaceEventSent = false;
+
+
+            // Reset multiple-face tracking
+            multipleFaceStartTime = null;
+            multipleFaceEventSent = false;
+
+        }
+
+
+        // =====================================
+        // MULTIPLE FACES
+        // =====================================
+
+        else {
+
+            faceStatus.textContent =
+                '🚨 Multiple faces detected: ' +
+                faceCount;
+
+            console.log(
+                'Multiple faces detected:',
+                faceCount
+            );
+
+
+            // Start multiple-face timer
+            if (
+                multipleFaceStartTime === null
+            ) {
+
+                multipleFaceStartTime =
+                    Date.now();
+
+            }
+
+
+            // Reset no-face tracking
+            noFaceStartTime = null;
+            noFaceEventSent = false;
+
+
+            // Check confirmation time
+            const multipleFaceDuration =
+                Date.now() -
+                multipleFaceStartTime;
+
+
+            if (
+                multipleFaceDuration >=
+                MULTIPLE_FACE_CONFIRMATION_TIME &&
+                !multipleFaceEventSent
+            ) {
+
+                multipleFaceEventSent = true;
+                  faceEventActive = true;
+
+                sendFaceEvent(
+                    'multiple_faces_detected'
+                );
+
+            }
+
+        }
+
+    } catch (error) {
+
+        console.error(
+            'Face detection error:',
+            error
+        );
+
+    }
+
+    requestAnimationFrame(
+        detectFaces
+    );
+}
+
+// =========================================
+// SEND FACE EVENT + CAPTURE EVIDENCE
+// =========================================
+
+async function sendFaceEvent(eventType) {
+
+    console.log(
+        'Face event detected:',
+        eventType
+    );
+
+    try {
+
+        // =========================================
+        // CAPTURE CURRENT WEBCAM FRAME
+        // =========================================
+
+        const canvas = document.createElement('canvas');
+
+        canvas.width = webcam.videoWidth;
+        canvas.height = webcam.videoHeight;
+
+        const context = canvas.getContext('2d');
+
+        context.drawImage(
+            webcam,
+            0,
+            0,
+            canvas.width,
+            canvas.height
+        );
+
+        // Convert screenshot to JPEG Blob
+        const screenshotBlob = await new Promise(resolve => {
+
+            canvas.toBlob(
+                blob => resolve(blob),
+                'image/jpeg',
+                0.85
+            );
+
+        });
+
+
+        // =========================================
+        // SEND EVENT + SCREENSHOT TO SERVER
+        // =========================================
+
+        const formData = new FormData();
+
+        formData.append(
+            'event_type',
+            eventType
+        );
+
+        formData.append(
+            'suspicion_score',
+            0
+        );
+
+        formData.append(
+            'evidence',
+            screenshotBlob,
+            eventType + '_' + Date.now() + '.jpg'
+        );
+
+
+        const response = await fetch(
+            '/cheating-event',
+            {
+
+                method: 'POST',
+
+                headers: {
+
+                    'X-CSRF-TOKEN':
+                        document.querySelector(
+                            'meta[name="csrf-token"]'
+                        ).content,
+
+                    'Accept':
+                        'application/json'
+
+                },
+
+                body: formData
+
+            }
+        );
+
+
+        const data = await response.json();
+
+
+        console.log(
+            'Face event stored with evidence:',
+            data
+        );
+
+
+    } catch (error) {
+
+        console.error(
+            'Error storing face event/evidence:',
+            error
+        );
+
+    }
+
+}
+
+// =========================================
+// EYE / GAZE MONITORING (Rules 1, 2, 3, 4)
+// =========================================
+
+class EyeGazeTracker {
+    constructor(options = {}) {
+        this.onEvent = options.onEvent || (() => {});
+        this.onStatusChange = options.onStatusChange || (() => {});
+        this.now = options.now || (() => Date.now());
+
+        // Threshold configurations
+        this.GAZE_DURATION_THRESHOLD = 2000;       // 2.0s continuous
+        this.EYES_UNDETECTED_THRESHOLD = 3000;     // > 3.0s continuous
+        this.EYES_COVERED_THRESHOLD = 3000;        // > 3.0s continuous
+        this.NORMAL_STABILITY_REQUIRED = 1500;     // 1.5s normal stability to confirm new incident eligibility
+        this.NORMAL_BLINK_MAX_DURATION = 500;      // < 500ms normal blink window
+
+        // Gaze boundary definitions
+        this.CENTER_X_MIN = 0.30;
+        this.CENTER_X_MAX = 0.70;
+        this.CENTER_Y_MIN = 0.22;
+        this.CENTER_Y_MAX = 0.80;
+
+        // Active detection timers (reset IMMEDIATELY when abnormal condition ends)
+        this.gazeTimerStart = null;
+        this.gazeLockedDirection = null;
+
+        this.eyesUndetectedTimerStart = null;
+        this.eyesCoveredTimerStart = null;
+
+        this.blinkTimerStart = null;
+
+        // Incident-based latching (prevents duplicate screenshots during same incident)
+        this.gazeIncidentLatched = false;
+        this.eyesUndetectedIncidentLatched = false;
+        this.eyesCoveredIncidentLatched = false;
+
+        // Normal-stability tracking (for confirming eligibility for a genuinely new incident)
+        this.gazeNormalStartTime = null;
+        this.eyesNormalStartTime = null;
+
+        // Status tracking
+        this.currentStatus = 'Centered';
+    }
+
+    classifyGazeDirection(avgGazeX, avgGazeY) {
+        let hDev = 0;
+        let hDir = null;
+        if (avgGazeX < this.CENTER_X_MIN) {
+            hDev = (this.CENTER_X_MIN - avgGazeX) / this.CENTER_X_MIN;
+            hDir = 'left';
+        } else if (avgGazeX > this.CENTER_X_MAX) {
+            hDev = (avgGazeX - this.CENTER_X_MAX) / 0.30;
+            hDir = 'right';
+        }
+
+        let vDev = 0;
+        let vDir = null;
+        if (avgGazeY < this.CENTER_Y_MIN) {
+            vDev = (this.CENTER_Y_MIN - avgGazeY) / this.CENTER_Y_MIN;
+            vDir = 'up';
+        } else if (avgGazeY > this.CENTER_Y_MAX) {
+            vDev = (avgGazeY - this.CENTER_Y_MAX) / 0.20;
+            vDir = 'down';
+        }
+
+        if (hDev === 0 && vDev === 0) {
+            return null;
+        }
+
+        if (hDev >= vDev) {
+            return hDir;
+        } else {
+            return vDir;
+        }
+    }
+
+    processFrame(input) {
+        const currentTime = this.now();
+
+        if (!input.faceDetected) {
+            this.resetAllTimers();
+            return;
+        }
+
+        // 1. BLINK DURATION TRACKING (Rule 4)
+        if (input.landmarksPresent && input.isEyeClosed) {
+            if (this.blinkTimerStart === null) {
+                this.blinkTimerStart = currentTime;
+            }
+            const blinkDuration = currentTime - this.blinkTimerStart;
+
+            if (blinkDuration < this.NORMAL_BLINK_MAX_DURATION) {
+                // NORMAL BLINK: under 500ms - must never trigger screenshots or gaze/occlusion timers
+                this.gazeTimerStart = null;
+                this.gazeLockedDirection = null;
+                this.eyesUndetectedTimerStart = null;
+                this.eyesCoveredTimerStart = null;
+
+                this.setStatus('Blinking');
+                return;
+            }
+        } else {
+            this.blinkTimerStart = null;
+        }
+
+        // 2. EYE VISIBILITY & OCCLUSION (Rules 2 & 3)
+        const eyesAreVisibleAndOpen = input.landmarksPresent && !input.isEyeClosed && input.avgGazeX !== null && input.avgGazeY !== null;
+
+        if (!eyesAreVisibleAndOpen) {
+            this.gazeTimerStart = null;
+            this.gazeLockedDirection = null;
+
+            if (input.handOverEyesDetected) {
+                // RULE 3: Verified Hand / Object Occlusion
+                this.eyesUndetectedTimerStart = null;
+
+                if (this.eyesCoveredTimerStart === null) {
+                    this.eyesCoveredTimerStart = currentTime;
+                }
+
+                const coveredDuration = currentTime - this.eyesCoveredTimerStart;
+
+                if (coveredDuration > this.EYES_COVERED_THRESHOLD) {
+                    if (!this.eyesCoveredIncidentLatched) {
+                        this.eyesCoveredIncidentLatched = true;
+                        this.onEvent('eyes_covered_object', 'Both eyes covered by object for more than 3 seconds.');
+                    }
+                }
+                this.setStatus('Eyes Covered');
+            } else {
+                // RULE 2: Face visible, but eyes undetected (closure or landmark failure)
+                this.eyesCoveredTimerStart = null;
+
+                if (this.eyesUndetectedTimerStart === null) {
+                    this.eyesUndetectedTimerStart = currentTime;
+                }
+
+                const undetectedDuration = currentTime - this.eyesUndetectedTimerStart;
+
+                if (undetectedDuration > this.EYES_UNDETECTED_THRESHOLD) {
+                    if (!this.eyesUndetectedIncidentLatched) {
+                        this.eyesUndetectedIncidentLatched = true;
+                        this.onEvent('eyes_not_detected', 'Face visible but both eyes undetected for more than 3 seconds.');
+                    }
+                }
+                this.setStatus('Eyes Undetected');
+            }
+
+            this.eyesNormalStartTime = null;
+            return;
+        }
+
+        // Eyes are detected and open: reset undetected & covered timers IMMEDIATELY
+        this.eyesUndetectedTimerStart = null;
+        this.eyesCoveredTimerStart = null;
+
+        if (this.eyesNormalStartTime === null) {
+            this.eyesNormalStartTime = currentTime;
+        } else if (currentTime - this.eyesNormalStartTime >= this.NORMAL_STABILITY_REQUIRED) {
+            this.eyesUndetectedIncidentLatched = false;
+            this.eyesCoveredIncidentLatched = false;
+        }
+
+        // 3. SUSTAINED DIRECTIONAL GAZE (Rule 1)
+        const direction = this.classifyGazeDirection(input.avgGazeX, input.avgGazeY);
+
+        if (direction !== null) {
+            this.gazeNormalStartTime = null;
+
+            if (this.gazeTimerStart === null) {
+                this.gazeTimerStart = currentTime;
+                this.gazeLockedDirection = direction;
+            }
+
+            const gazeDuration = currentTime - this.gazeTimerStart;
+
+            if (gazeDuration >= this.GAZE_DURATION_THRESHOLD) {
+                if (!this.gazeIncidentLatched) {
+                    this.gazeIncidentLatched = true;
+                    const eventType = `gaze_away_${this.gazeLockedDirection}`;
+                    const dirName = this.gazeLockedDirection.toUpperCase();
+                    this.onEvent(eventType, `Sustained eye gaze away from screen (${dirName}) for 2+ seconds.`);
+                }
+            }
+
+            this.setStatus(`Gaze: ${this.gazeLockedDirection.charAt(0).toUpperCase() + this.gazeLockedDirection.slice(1)}`);
+        } else {
+            // Centered
+            this.gazeTimerStart = null;
+            this.gazeLockedDirection = null;
+
+            if (this.gazeNormalStartTime === null) {
+                this.gazeNormalStartTime = currentTime;
+            } else if (currentTime - this.gazeNormalStartTime >= this.NORMAL_STABILITY_REQUIRED) {
+                this.gazeIncidentLatched = false;
+            }
+
+            this.setStatus('Centered');
+        }
+    }
+
+    resetAllTimers() {
+        this.gazeTimerStart = null;
+        this.gazeLockedDirection = null;
+        this.eyesUndetectedTimerStart = null;
+        this.eyesCoveredTimerStart = null;
+        this.blinkTimerStart = null;
+        this.gazeNormalStartTime = null;
+        this.eyesNormalStartTime = null;
+    }
+
+    setStatus(status) {
+        if (this.currentStatus !== status) {
+            this.currentStatus = status;
+            this.onStatusChange(status);
+        }
+    }
+}
+
+const testGazeStatusEl = document.getElementById('gazeStatus');
+const eyeGazeTracker = new EyeGazeTracker({
+    now: () => Date.now(),
+    onEvent: (eventType, desc) => {
+        console.log('🚨 Eye gaze proctoring event:', eventType, desc);
+        sendFaceEvent(eventType);
+    },
+    onStatusChange: (status) => {
+        if (testGazeStatusEl) {
+            testGazeStatusEl.textContent = 'Eye Gaze: ' + status;
+        }
+    }
+});
+
+let lastLandmarkerTimestamp = -1;
+
+function detectEyeLandmarks() {
+    if (!window.faceLandmarker || !webcam.videoWidth || !webcam.videoHeight) {
+        requestAnimationFrame(detectEyeLandmarks);
+        return;
+    }
+
+    try {
+        let timestamp = performance.now();
+        if (timestamp <= lastLandmarkerTimestamp) {
+            timestamp = lastLandmarkerTimestamp + 1;
+        }
+        lastLandmarkerTimestamp = timestamp;
+
+        const result = window.faceLandmarker.detectForVideo(webcam, timestamp);
+        const hasMesh = result.faceLandmarks && result.faceLandmarks.length > 0;
+        const isSingleFace = (currentFaceCount === 1) || (currentFaceCount === -1 && hasMesh);
+
+        if (!isSingleFace || currentFaceCount === 0 || currentFaceCount > 1) {
+            eyeGazeTracker.processFrame({
+                faceDetected: false,
+                landmarksPresent: false,
+                isEyeClosed: false,
+                avgGazeX: null,
+                avgGazeY: null,
+                handOverEyesDetected: false
+            });
+            requestAnimationFrame(detectEyeLandmarks);
+            return;
+        }
+
+        if (!hasMesh) {
+            eyeGazeTracker.processFrame({
+                faceDetected: true,
+                landmarksPresent: false,
+                isEyeClosed: false,
+                avgGazeX: null,
+                avgGazeY: null,
+                handOverEyesDetected: false
+            });
+            requestAnimationFrame(detectEyeLandmarks);
+            return;
+        }
+
+        const landmarks = result.faceLandmarks[0];
+
+        const leftMinX = Math.min(landmarks[33].x, landmarks[133].x);
+        const leftMaxX = Math.max(landmarks[33].x, landmarks[133].x);
+        const leftEyeWidth = leftMaxX - leftMinX;
+
+        const rightMinX = Math.min(landmarks[362].x, landmarks[263].x);
+        const rightMaxX = Math.max(landmarks[362].x, landmarks[263].x);
+        const rightEyeWidth = rightMaxX - rightMinX;
+
+        const leftMinY = Math.min(landmarks[159].y, landmarks[145].y);
+        const leftMaxY = Math.max(landmarks[159].y, landmarks[145].y);
+        const leftEyeHeight = leftMaxY - leftMinY;
+
+        const rightMinY = Math.min(landmarks[386].y, landmarks[374].y);
+        const rightMaxY = Math.max(landmarks[386].y, landmarks[374].y);
+        const rightEyeHeight = rightMaxY - rightMinY;
+
+        const eyesValid = (leftEyeWidth > 0.001 && rightEyeWidth > 0.001 && leftEyeHeight > 0.0005 && rightEyeHeight > 0.0005);
+
+        if (!eyesValid) {
+            eyeGazeTracker.processFrame({
+                faceDetected: true,
+                landmarksPresent: false,
+                isEyeClosed: false,
+                avgGazeX: null,
+                avgGazeY: null,
+                handOverEyesDetected: false
+            });
+            requestAnimationFrame(detectEyeLandmarks);
+            return;
+        }
+
+        const leftEAR = leftEyeHeight / leftEyeWidth;
+        const rightEAR = rightEyeHeight / rightEyeWidth;
+        const isEyeClosed = (leftEAR < 0.12 && rightEAR < 0.12);
+
+        function getCenter(points) {
+            let x = 0;
+            let y = 0;
+            points.forEach(point => {
+                x += point.x;
+                y += point.y;
+            });
+            return {
+                x: x / points.length,
+                y: y / points.length
+            };
+        }
+
+        const leftIris = [
+            landmarks[468],
+            landmarks[469],
+            landmarks[470],
+            landmarks[471],
+            landmarks[472]
+        ];
+
+        const rightIris = [
+            landmarks[473],
+            landmarks[474],
+            landmarks[475],
+            landmarks[476],
+            landmarks[477]
+        ];
+
+        const leftIrisCenter = getCenter(leftIris);
+        const rightIrisCenter = getCenter(rightIris);
+
+        const leftGazeX = (leftIrisCenter.x - leftMinX) / leftEyeWidth;
+        const rightGazeX = (rightIrisCenter.x - rightMinX) / rightEyeWidth;
+        const gazeX = (leftGazeX + rightGazeX) / 2;
+
+        const leftGazeY = (leftIrisCenter.y - leftMinY) / leftEyeHeight;
+        const rightGazeY = (rightIrisCenter.y - rightMinY) / rightEyeHeight;
+        const gazeY = (leftGazeY + rightGazeY) / 2;
+
+        eyeGazeTracker.processFrame({
+            faceDetected: true,
+            landmarksPresent: true,
+            isEyeClosed: isEyeClosed,
+            avgGazeX: gazeX,
+            avgGazeY: gazeY,
+            handOverEyesDetected: false
+        });
+
+    } catch (error) {
+        console.error('Eye/gaze detection error:', error);
+    }
+
+    requestAnimationFrame(detectEyeLandmarks);
+}
+    </script>
+
+</body>
+
+</html>

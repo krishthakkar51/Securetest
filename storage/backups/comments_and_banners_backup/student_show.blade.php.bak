@@ -1,0 +1,227 @@
+<x-app-layout>
+    <x-slot name="header">
+        <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+            <div>
+                <div class="flex items-center gap-2">
+                    <a href="{{ route('student.classrooms.index') }}" class="text-xs font-semibold text-emerald-600 dark:text-emerald-400 hover:underline">
+                        &larr; My Classrooms
+                    </a>
+                </div>
+                <h2 class="font-bold text-2xl text-gray-800 dark:text-gray-100 leading-tight mt-1">
+                    {{ $classroom->name }}
+                </h2>
+                <p class="text-xs text-gray-500 dark:text-gray-400 mt-1">
+                    Instructor: <strong class="text-gray-700 dark:text-gray-300">{{ $classroom->teacher->name }}</strong>
+                </p>
+            </div>
+            <a href="{{ route('student.classrooms.index') }}" class="inline-flex items-center text-xs font-semibold px-3 py-1.5 bg-gray-100 hover:bg-gray-200 dark:bg-gray-700 dark:hover:bg-gray-600 rounded-lg text-gray-700 dark:text-gray-200 transition">
+                Back to Classrooms
+            </a>
+        </div>
+    </x-slot>
+
+    <div class="py-8">
+        <div class="max-w-7xl mx-auto sm:px-6 lg:px-8 space-y-6">
+
+            <!-- Flash Alerts -->
+            @if (session('success'))
+                <div class="p-4 bg-emerald-50 dark:bg-emerald-900/30 border border-emerald-200 dark:border-emerald-800 rounded-xl text-emerald-800 dark:text-emerald-300 text-sm flex items-center justify-between">
+                    <div class="flex items-center">
+                        <svg class="w-5 h-5 mr-3 text-emerald-600 dark:text-emerald-400 flex-shrink-0" fill="currentColor" viewBox="0 0 20 20">
+                            <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clip-rule="evenodd"></path>
+                        </svg>
+                        <span>{{ session('success') }}</span>
+                    </div>
+                </div>
+            @endif
+
+            @if (session('error'))
+                <div class="p-4 bg-rose-50 dark:bg-rose-900/30 border border-rose-200 dark:border-rose-800 rounded-xl text-rose-800 dark:text-rose-300 text-sm flex items-center">
+                    <svg class="w-5 h-5 mr-3 text-rose-600 dark:text-rose-400 flex-shrink-0" fill="currentColor" viewBox="0 0 20 20">
+                        <path fill-rule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7 4a1 1 0 11-2 0 1 1 0 012 0zm-1-9a1 1 0 00-1 1v4a1 1 0 102 0V6a1 1 0 00-1-1z" clip-rule="evenodd"></path>
+                    </svg>
+                    <span>{{ session('error') }}</span>
+                </div>
+            @endif
+
+            <!-- Classroom Banner -->
+            @php
+                $theme = $classroom->bannerTheme();
+                $bannerUrl = $classroom->bannerUrl();
+            @endphp
+            <div class="rounded-2xl shadow-lg p-6 text-white relative overflow-hidden" style="{{ $bannerUrl ? "background-image: url('{$bannerUrl}'); background-size: cover; background-position: center;" : "background: {$theme['bg']};" }}">
+                <div class="absolute inset-0 bg-black/40 backdrop-blur-[1px]"></div>
+                <div class="relative z-10">
+                    <span class="inline-block px-2.5 py-0.5 rounded bg-white/20 text-white text-xs font-semibold uppercase tracking-wider mb-2 backdrop-blur-sm">
+                        Classroom Portal
+                    </span>
+                    <h1 class="text-2xl font-bold">{{ $classroom->name }}</h1>
+                    @if ($classroom->description)
+                        <p class="text-white/90 mt-2 text-sm max-w-2xl">
+                            {{ $classroom->description }}
+                        </p>
+                    @endif
+                    <div class="flex items-center gap-4 mt-4 text-xs text-white/90">
+                        <span>Instructor: <strong class="text-white">{{ $classroom->teacher ? $classroom->teacher->name : 'Instructor' }}</strong></span>
+                        <span>&bull;</span>
+                        <span>Assigned Examinations: <strong class="text-white">{{ $classroomTests->count() }}</strong></span>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Classroom Study Materials Card -->
+            <div class="bg-white dark:bg-stone-800 rounded-xl shadow-sm p-6 border border-stone-200 dark:border-stone-700">
+                <div class="flex items-center justify-between mb-4">
+                    <div>
+                        <h3 class="text-lg font-bold text-stone-900 dark:text-stone-100">
+                            Classroom Study Materials
+                        </h3>
+                        <p class="text-xs text-stone-500">
+                            Lecture notes, reference files, and slides uploaded by your instructor.
+                        </p>
+                    </div>
+                    <span class="text-xs font-semibold px-2.5 py-1 rounded-full bg-stone-100 dark:bg-stone-700 text-stone-600 dark:text-stone-300">
+                        {{ $classroom->materials->count() }} File(s)
+                    </span>
+                </div>
+
+                @if ($classroom->materials->count() > 0)
+                    <div class="space-y-3">
+                        @foreach ($classroom->materials as $mat)
+                            <div class="p-3.5 rounded-xl border border-stone-200 dark:border-stone-700/80 bg-stone-50/50 dark:bg-stone-800/40 flex items-center justify-between gap-4 hover:border-stone-400 transition">
+                                <div class="flex items-center gap-3 min-w-0">
+                                    <span class="w-10 h-10 rounded-lg flex items-center justify-center text-xs font-bold shrink-0 uppercase {{ $mat->typeBadgeColor() }}">
+                                        {{ $mat->extension() }}
+                                    </span>
+                                    <div class="min-w-0">
+                                        <h4 class="font-bold text-sm text-stone-900 dark:text-stone-100 truncate">
+                                            {{ $mat->title }}
+                                        </h4>
+                                        <p class="text-[11px] text-stone-500 truncate">
+                                            {{ $mat->original_filename }} &bull; {{ $mat->formattedSize() }} &bull; Uploaded {{ $mat->created_at->format('M d, Y') }}
+                                        </p>
+                                        @if ($mat->description)
+                                            <p class="text-xs text-stone-600 dark:text-stone-400 mt-1 line-clamp-1">
+                                                {{ $mat->description }}
+                                            </p>
+                                        @endif
+                                    </div>
+                                </div>
+
+                                <a href="{{ route('student.classrooms.materials.download', [$classroom, $mat]) }}" class="inline-flex items-center px-3 py-1.5 text-xs font-semibold rounded-lg bg-stone-800 hover:bg-stone-900 text-white dark:bg-stone-100 dark:hover:bg-white dark:text-stone-900 shadow-sm transition shrink-0" title="Download Material">
+                                    <svg class="w-3.5 h-3.5 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/></svg>
+                                    Download
+                                </a>
+                            </div>
+                        @endforeach
+                    </div>
+                @else
+                    <div class="border-2 border-dashed border-stone-200 dark:border-stone-700 rounded-xl p-6 text-center">
+                        <p class="text-xs text-stone-500 dark:text-stone-400">No study materials shared in this classroom yet.</p>
+                    </div>
+                @endif
+            </div>
+
+            <!-- Classroom Assigned Tests Categorized Section -->
+            <div class="bg-white dark:bg-gray-800 rounded-xl shadow-sm p-6 border border-gray-100 dark:border-gray-700"
+                 x-data="{ activeSection: '{{ $availableTests->count() > 0 ? 'available' : ($upcomingTests->count() > 0 ? 'upcoming' : ($pastDeadlineTests->count() > 0 ? 'past' : 'submitted')) }}' }">
+                <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 mb-6">
+                    <div>
+                        <h3 class="text-lg font-bold text-gray-900 dark:text-gray-100">
+                            Classroom Examinations
+                        </h3>
+                        <p class="text-xs text-gray-500 dark:text-gray-400">
+                            Tests scheduled specifically for this classroom.
+                        </p>
+                    </div>
+
+                    <!-- Category Tab Selectors -->
+                    <div class="inline-flex p-1 bg-gray-100 dark:bg-gray-700/60 rounded-xl text-xs font-semibold">
+                        <button type="button" @click="activeSection = 'available'"
+                                class="px-3 py-1.5 rounded-lg transition"
+                                :class="activeSection === 'available' ? 'bg-white dark:bg-gray-800 text-emerald-600 dark:text-emerald-400 shadow-sm font-bold' : 'text-gray-500 hover:text-gray-800 dark:text-gray-300'">
+                            Available ({{ $availableTests->count() }})
+                        </button>
+                        <button type="button" @click="activeSection = 'upcoming'"
+                                class="px-3 py-1.5 rounded-lg transition"
+                                :class="activeSection === 'upcoming' ? 'bg-white dark:bg-gray-800 text-blue-600 dark:text-blue-400 shadow-sm font-bold' : 'text-gray-500 hover:text-gray-800 dark:text-gray-300'">
+                            Upcoming ({{ $upcomingTests->count() }})
+                        </button>
+                        <button type="button" @click="activeSection = 'past'"
+                                class="px-3 py-1.5 rounded-lg transition"
+                                :class="activeSection === 'past' ? 'bg-white dark:bg-gray-800 text-amber-600 dark:text-amber-400 shadow-sm font-bold' : 'text-gray-500 hover:text-gray-800 dark:text-gray-300'">
+                            Past Deadline ({{ $pastDeadlineTests->count() }})
+                        </button>
+                        <button type="button" @click="activeSection = 'submitted'"
+                                class="px-3 py-1.5 rounded-lg transition"
+                                :class="activeSection === 'submitted' ? 'bg-white dark:bg-gray-800 text-purple-600 dark:text-purple-400 shadow-sm font-bold' : 'text-gray-500 hover:text-gray-800 dark:text-gray-300'">
+                            Submitted ({{ $submittedTests->count() }})
+                        </button>
+                    </div>
+                </div>
+
+                <!-- Section 1: Available -->
+                <div x-show="activeSection === 'available'" class="space-y-4">
+                    @if ($availableTests->count() > 0)
+                        <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                            @foreach ($availableTests as $assignment)
+                                @include('student.classrooms.partials.student-test-card', ['assignment' => $assignment, 'attempt' => $myAttempts[$assignment->test_id] ?? null])
+                            @endforeach
+                        </div>
+                    @else
+                        <div class="border-2 border-dashed border-gray-100 dark:border-gray-700 rounded-xl p-8 text-center">
+                            <p class="text-sm font-semibold text-gray-700 dark:text-gray-300">No examinations currently open to take in this classroom.</p>
+                            <p class="text-xs text-gray-500 dark:text-gray-400 mt-1">Check the Upcoming tab for scheduled tests.</p>
+                        </div>
+                    @endif
+                </div>
+
+                <!-- Section 2: Upcoming -->
+                <div x-show="activeSection === 'upcoming'" class="space-y-4">
+                    @if ($upcomingTests->count() > 0)
+                        <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                            @foreach ($upcomingTests as $assignment)
+                                @include('student.classrooms.partials.student-test-card', ['assignment' => $assignment, 'attempt' => $myAttempts[$assignment->test_id] ?? null])
+                            @endforeach
+                        </div>
+                    @else
+                        <div class="border-2 border-dashed border-gray-100 dark:border-gray-700 rounded-xl p-8 text-center">
+                            <p class="text-sm font-semibold text-gray-700 dark:text-gray-300">No upcoming tests scheduled for this classroom.</p>
+                        </div>
+                    @endif
+                </div>
+
+                <!-- Section 3: Past Deadline -->
+                <div x-show="activeSection === 'past'" class="space-y-4">
+                    @if ($pastDeadlineTests->count() > 0)
+                        <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                            @foreach ($pastDeadlineTests as $assignment)
+                                @include('student.classrooms.partials.student-test-card', ['assignment' => $assignment, 'attempt' => $myAttempts[$assignment->test_id] ?? null])
+                            @endforeach
+                        </div>
+                    @else
+                        <div class="border-2 border-dashed border-gray-100 dark:border-gray-700 rounded-xl p-8 text-center">
+                            <p class="text-sm font-semibold text-gray-700 dark:text-gray-300">No past deadline examinations for this classroom.</p>
+                        </div>
+                    @endif
+                </div>
+
+                <!-- Section 4: Submitted -->
+                <div x-show="activeSection === 'submitted'" class="space-y-4">
+                    @if ($submittedTests->count() > 0)
+                        <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                            @foreach ($submittedTests as $assignment)
+                                @include('student.classrooms.partials.student-test-card', ['assignment' => $assignment, 'attempt' => $myAttempts[$assignment->test_id] ?? null])
+                            @endforeach
+                        </div>
+                    @else
+                        <div class="border-2 border-dashed border-gray-100 dark:border-gray-700 rounded-xl p-8 text-center">
+                            <p class="text-sm font-semibold text-gray-700 dark:text-gray-300">You haven't submitted any examinations in this classroom yet.</p>
+                        </div>
+                    @endif
+                </div>
+            </div>
+
+        </div>
+    </div>
+</x-app-layout>

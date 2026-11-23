@@ -1,0 +1,219 @@
+<?php
+
+namespace App\Models;
+
+use Illuminate\Database\Eloquent\Collection;
+use Illuminate\Database\Eloquent\Factories\HasFactory;
+use Illuminate\Database\Eloquent\Model;
+use Illuminate\Database\Eloquent\Relations\BelongsTo;
+use Illuminate\Database\Eloquent\Relations\HasMany;
+
+class ExamAttempt extends Model
+{
+    use HasFactory;
+
+    public const STATUS_IN_PROGRESS = 'in_progress';
+    public const STATUS_SUBMITTED = 'submitted';
+    public const STATUS_GRADED = 'graded';
+
+    protected $fillable = [
+        'test_id',
+        'classroom_id',
+        'user_id',
+        'status',
+        'is_late',
+        'score',
+        'negative_marks',
+        'negative_marks_reason',
+        'total_marks',
+        'teacher_feedback',
+        'graded_at',
+        'started_at',
+        'submitted_at',
+    ];
+
+    protected $casts = [
+        'is_late' => 'boolean',
+        'score' => 'float',
+        'negative_marks' => 'float',
+        'total_marks' => 'float',
+        'graded_at' => 'datetime',
+        'started_at' => 'datetime',
+        'submitted_at' => 'datetime',
+    ];
+
+    public function test(): BelongsTo
+    {
+        return $this->belongsTo(Test::class);
+    }
+
+    public function classroom(): BelongsTo
+    {
+        return $this->belongsTo(Classroom::class);
+    }
+
+    public function student(): BelongsTo
+    {
+        return $this->belongsTo(User::class, 'user_id');
+    }
+
+    public function answers(): HasMany
+    {
+        return $this->hasMany(StudentAnswer::class);
+    }
+
+    public function cheatingEvents(): HasMany
+    {
+        return $this->hasMany(CheatingEvent::class, 'exam_attempt_id');
+    }
+
+    public function markDeductionAudits(): HasMany
+    {
+        return $this->hasMany(MarkDeductionAudit::class)->latest();
+    }
+
+    /**
+     * Calculate Final Marks = Exam Marks - Negative Marks.
+     * Preserves original exam marks in $this->score.
+     */
+    public function getFinalMarksAttribute(): float
+    {
+        $examScore = (float) $this->score;
+        $negative = (float) ($this->negative_marks ?? 0);
+        return round(max(0.0, $examScore - $negative), 2);
+    }
+
+    public function getFinalScoreAttribute(): float
+    {
+        return $this->getFinalMarksAttribute();
+    }
+
+    /**
+     * Retrieve all cheating events associated with this attempt.
+     * New events link directly via exam_attempt_id.
+     * Legacy events without an exam_attempt_id are only matched if the user ID matches AND
+     * the timestamp strictly and reliably falls within the attempt start and submission window.
+     */
+    public function associatedCheatingEvents(): Collection
+    {
+        return CheatingEvent::where('exam_attempt_id', $this->id)
+            ->orWhere(function ($query) {
+                $query->whereNull('exam_attempt_id')
+                    ->where('user_id', $this->user_id)
+                    ->whereNotNull('occurred_at')
+                    ->where('occurred_at', '>=', $this->started_at)
+                    ->when($this->submitted_at, function ($q) {
+                        $q->where('occurred_at', '<=', $this->submitted_at);
+                    });
+            })
+            ->orderBy('occurred_at', 'asc')
+            ->get();
+    }
+
+    public function isSubmitted(): bool
+    {
+        return in_array($this->status, [self::STATUS_SUBMITTED, self::STATUS_GRADED], true);
+    }
+
+    public function isInProgress(): bool
+    {
+        return $this->status === self::STATUS_IN_PROGRESS;
+    }
+
+    public function writtenAnswersCount(): int
+    {
+        if ($this->relationLoaded('answers')) {
+            return $this->answers->filter(fn ($ans) => $ans->question && $ans->question->isText())->count();
+        }
+
+        if ($this->relationLoaded('test') && $this->test && $this->test->relationLoaded('questions')) {
+            return $this->test->questions->where('question_type', Question::TYPE_TEXT)->count();
+        }
+
+        $ansCount = $this->answers()
+            ->whereHas('question', fn ($q) => $q->where('question_type', Question::TYPE_TEXT))
+            ->count();
+
+        if ($ansCount > 0) {
+            return $ansCount;
+        }
+
+        return $this->test ? $this->test->questions()->where('question_type', Question::TYPE_TEXT)->count() : 0;
+    }
+
+    public function gradedWrittenAnswersCount(): int
+    {
+        if ($this->relationLoaded('answers')) {
+            return $this->answers->filter(fn ($ans) => $ans->question && $ans->question->isText() && (bool) $ans->is_graded)->count();
+        }
+
+        return $this->answers()
+            ->whereHas('question', fn ($q) => $q->where('question_type', Question::TYPE_TEXT))
+            ->where('is_graded', true)
+            ->count();
+    }
+
+    public function cheatingAlertsCount(): int
+    {
+        if ($this->relationLoaded('cheatingEvents')) {
+            return $this->cheatingEvents->count();
+        }
+
+        return $this->associatedCheatingEvents()->count();
+    }
+
+    public function gradingStatus(): string
+    {
+        if (!$this->isSubmitted()) {
+            return 'not_submitted';
+        }
+
+        $writtenTotal = $this->writtenAnswersCount();
+        if ($writtenTotal === 0) {
+            return 'fully_graded';
+        }
+
+        $gradedCount = $this->gradedWrittenAnswersCount();
+        if ($gradedCount === 0) {
+            return 'ungraded';
+        }
+
+        if ($gradedCount < $writtenTotal) {
+            return 'partially_graded';
+        }
+
+        return 'fully_graded';
+    }
+
+    public function isFullyGraded(): bool
+    {
+        return $this->gradingStatus() === 'fully_graded';
+    }
+
+    public function isPartiallyGraded(): bool
+    {
+        return $this->gradingStatus() === 'partially_graded';
+    }
+
+    public function isUngraded(): bool
+    {
+        return $this->gradingStatus() === 'ungraded';
+    }
+
+    /**
+     * Determine if the attempt has already been graded based on saved data.
+     */
+    public function isGraded(): bool
+    {
+        if (!$this->isSubmitted()) {
+            return false;
+        }
+
+        if ($this->status === self::STATUS_GRADED || $this->graded_at !== null) {
+            return true;
+        }
+
+        return $this->isFullyGraded();
+    }
+}
+

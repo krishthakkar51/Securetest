@@ -1,0 +1,74 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 320" width="100%" height="100%">
+  <defs>
+    <linearGradient id="absGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#312e81" />
+      <stop offset="45%" stop-color="#4c1d95" />
+      <stop offset="100%" stop-color="#1e1b4b" />
+    </linearGradient>
+    <linearGradient id="polygonGrad1" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#a855f7" stop-opacity="0.4" />
+      <stop offset="100%" stop-color="#6366f1" stop-opacity="0.1" />
+    </linearGradient>
+    <linearGradient id="polygonGrad2" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#ec4899" stop-opacity="0.3" />
+      <stop offset="100%" stop-color="#8b5cf6" stop-opacity="0.1" />
+    </linearGradient>
+  </defs>
+
+  <!-- Background -->
+  <rect width="1200" height="320" fill="url(#absGrad)" />
+
+  <!-- Multi-layered Isometric Cubes Lattice -->
+  <g transform="translate(940, 150)" stroke="#c084fc" stroke-width="1.5" stroke-opacity="0.5">
+    <!-- Center Cube -->
+    <g transform="translate(0, 0)">
+      <polygon points="0,-40 34.6,-20 0,0 -34.6,-20" fill="url(#polygonGrad1)" />
+      <polygon points="0,0 34.6,-20 34.6,20 0,40" fill="#6366f1" fill-opacity="0.3" />
+      <polygon points="0,0 -34.6,-20 -34.6,20 0,40" fill="#4f46e5" fill-opacity="0.4" />
+    </g>
+    <!-- Top-Right Cube -->
+    <g transform="translate(70, -40)">
+      <polygon points="0,-30 26,-15 0,0 -26,-15" fill="url(#polygonGrad2)" />
+      <polygon points="0,0 26,-15 26,15 0,30" fill="#a855f7" fill-opacity="0.3" />
+      <polygon points="0,0 -26,-15 -26,15 0,30" fill="#7e22ce" fill-opacity="0.4" />
+    </g>
+    <!-- Bottom-Left Cube -->
+    <g transform="translate(-70, 40)">
+      <polygon points="0,-30 26,-15 0,0 -26,-15" fill="url(#polygonGrad2)" />
+      <polygon points="0,0 26,-15 26,15 0,30" fill="#a855f7" fill-opacity="0.3" />
+      <polygon points="0,0 -26,-15 -26,15 0,30" fill="#7e22ce" fill-opacity="0.4" />
+    </g>
+    <!-- Wireframe connections -->
+    <line x1="0" y1="0" x2="70" y2="-40" stroke-dasharray="3 3" />
+    <line x1="0" y1="0" x2="-70" y2="40" stroke-dasharray="3 3" />
+    <circle cx="70" cy="-40" r="3" fill="#e879f9" />
+    <circle cx="-70" cy="40" r="3" fill="#e879f9" />
+  </g>
+
+  <!-- Voronoi Tessellation & Neural Network Nodes -->
+  <g stroke="#a5b4fc" stroke-opacity="0.25" fill="none" stroke-width="1.5">
+    <polygon points="120,60 260,30 320,120 220,190 100,140" fill="url(#polygonGrad1)" />
+    <polygon points="260,30 420,50 480,140 320,120" />
+    <polygon points="320,120 480,140 440,240 280,260 220,190" fill="url(#polygonGrad2)" />
+    <polygon points="480,140 640,110 680,210 580,270 440,240" />
+    <polygon points="640,110 780,80 840,180 680,210" />
+
+    <!-- Network Vertices / Data Nodes -->
+    <circle cx="120" cy="60" r="4" fill="#818cf8" />
+    <circle cx="260" cy="30" r="4" fill="#c084fc" />
+    <circle cx="320" cy="120" r="5" fill="#f472b6" />
+    <circle cx="480" cy="140" r="4" fill="#818cf8" />
+    <circle cx="440" cy="240" r="4" fill="#c084fc" />
+    <circle cx="680" cy="210" r="5" fill="#f472b6" />
+  </g>
+
+  <!-- Flowing Waves of Geometry -->
+  <path d="M 0,260 C 250,220 350,300 600,250 C 850,200 950,280 1200,240" fill="none" stroke="#c084fc" stroke-opacity="0.2" stroke-width="2" />
+  <path d="M 0,280 C 200,240 400,320 700,270 C 1000,220 1100,290 1200,260" fill="none" stroke="#818cf8" stroke-opacity="0.15" stroke-width="1.5" stroke-dasharray="6 4" />
+
+  <!-- Subtitle Tag -->
+  <g transform="translate(60, 280)">
+    <rect width="200" height="24" rx="12" fill="#1e1b4b" fill-opacity="0.7" stroke="#818cf8" stroke-width="1" />
+    <text x="100" y="16" font-family="sans-serif" font-size="11" font-weight="bold" fill="#c7d2fe" text-anchor="middle" letter-spacing="1.5">ABSTRACT &amp; INTERDISCIPLINARY</text>
+  </g>
+</svg>

@@ -1,0 +1,136 @@
+<?php
+
+namespace Tests\Feature\Auth;
+
+use App\Http\Middleware\CheckActiveSession;
+use App\Models\User;
+use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\Notification;
+use Illuminate\Auth\Notifications\VerifyEmail;
+use Tests\TestCase;
+
+class EmailVerificationEnforcementTest extends TestCase
+{
+    use RefreshDatabase;
+
+    protected function setUp(): void
+    {
+        parent::setUp();
+        $this->withoutMiddleware(CheckActiveSession::class);
+    }
+
+    public function test_unverified_student_is_redirected_to_verify_email_from_dashboard(): void
+    {
+        $user = User::factory()->unverified()->create([
+            'role' => User::ROLE_STUDENT,
+        ]);
+
+        $response = $this->actingAs($user)->get('/dashboard');
+
+        $response->assertRedirect(route('verification.notice'));
+    }
+
+    public function test_unverified_student_cannot_access_student_dashboard(): void
+    {
+        $user = User::factory()->unverified()->create([
+            'role' => User::ROLE_STUDENT,
+        ]);
+
+        $response = $this->actingAs($user)->get('/student/dashboard');
+
+        $response->assertRedirect(route('verification.notice'));
+    }
+
+    public function test_unverified_student_cannot_access_student_classrooms(): void
+    {
+        $user = User::factory()->unverified()->create([
+            'role' => User::ROLE_STUDENT,
+        ]);
+
+        $response = $this->actingAs($user)->get('/student/classrooms');
+
+        $response->assertRedirect(route('verification.notice'));
+    }
+
+    public function test_unverified_teacher_cannot_access_teacher_dashboard(): void
+    {
+        $teacher = User::factory()->unverified()->create([
+            'role' => User::ROLE_TEACHER,
+        ]);
+
+        $response = $this->actingAs($teacher)->get('/teacher/dashboard');
+
+        $response->assertRedirect(route('verification.notice'));
+    }
+
+    public function test_unverified_teacher_cannot_access_classroom_management(): void
+    {
+        $teacher = User::factory()->unverified()->create([
+            'role' => User::ROLE_TEACHER,
+        ]);
+
+        $response = $this->actingAs($teacher)->get('/teacher/classrooms');
+
+        $response->assertRedirect(route('verification.notice'));
+    }
+
+    public function test_unverified_user_cannot_access_profile(): void
+    {
+        $user = User::factory()->unverified()->create();
+
+        $response = $this->actingAs($user)->get('/profile');
+
+        $response->assertRedirect(route('verification.notice'));
+    }
+
+    public function test_unverified_user_can_view_verification_notice_screen(): void
+    {
+        $user = User::factory()->unverified()->create([
+            'email' => 'student.pending@example.com',
+        ]);
+
+        $response = $this->actingAs($user)->get('/verify-email');
+
+        $response->assertStatus(200);
+        $response->assertSee('Verify Your Email Address');
+        $response->assertSee('student.pending@example.com');
+        $response->assertSee('Resend Verification Email');
+        $response->assertSee('Sign Out');
+    }
+
+    public function test_unverified_user_can_resend_verification_email(): void
+    {
+        Notification::fake();
+
+        $user = User::factory()->unverified()->create();
+
+        $response = $this->actingAs($user)->post('/email/verification-notification');
+
+        $response->assertSessionHas('status', 'verification-link-sent');
+        Notification::assertSentTo($user, VerifyEmail::class);
+    }
+
+    public function test_verified_user_accessing_verification_notice_is_redirected_to_dashboard(): void
+    {
+        $user = User::factory()->create([
+            'role' => User::ROLE_STUDENT,
+            'email_verified_at' => now(),
+        ]);
+
+        $response = $this->actingAs($user)->get('/verify-email');
+
+        $response->assertRedirect(route('dashboard', absolute: false));
+    }
+
+    public function test_verified_student_can_access_dashboard_and_student_routes(): void
+    {
+        $user = User::factory()->create([
+            'role' => User::ROLE_STUDENT,
+            'email_verified_at' => now(),
+        ]);
+
+        $response = $this->actingAs($user)->get('/dashboard');
+
+        $response->assertRedirect(route('student.dashboard'));
+    }
+}

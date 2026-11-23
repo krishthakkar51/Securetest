@@ -1,0 +1,1523 @@
+<!DOCTYPE html>
+
+<html lang="en">
+
+<head>
+
+    <meta charset="UTF-8">
+
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+    <title>{{ $test->title }} - Proctored Examination | SecureTest</title>
+
+    <meta name="csrf-token" content="{{ csrf_token() }}">
+
+    <meta name="auth-check" content="1">
+
+    @vite(['resources/css/app.css', 'resources/js/app.js'])
+
+</head>
+
+<body class="bg-gray-100 text-gray-800 antialiased selection:bg-emerald-500 selection:text-white">
+
+    <!-- Pre-Start Gate Overlay -->
+
+    <div id="startOverlay" class="fixed inset-0 z-50 bg-gray-900/90 backdrop-blur-md flex items-center justify-center p-4">
+
+        <div class="bg-white rounded-2xl shadow-2xl max-w-lg w-full p-8 text-center space-y-6">
+
+            <div class="w-16 h-16 bg-emerald-100 text-emerald-700 rounded-2xl flex items-center justify-center mx-auto">
+
+                <svg class="w-8 h-8" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z"></path>
+
+                </svg>
+
+            </div>
+
+            <div>
+
+                <span class="text-xs font-semibold text-emerald-700 uppercase tracking-widest">{{ $classroom->name }}</span>
+
+                <h2 class="text-2xl font-bold text-gray-900 mt-1">{{ $test->title }}</h2>
+
+                <p class="text-xs text-gray-500 mt-2">
+
+                    Duration: <strong>{{ $test->duration_minutes }} minutes</strong> • Total Marks: <strong>{{ $test->total_marks }}</strong> • Questions: <strong>{{ $test->questions->count() }}</strong>
+
+                </p>
+
+            </div>
+
+            <div class="bg-gray-50 rounded-xl p-4 text-left text-xs text-gray-600 space-y-2 border border-gray-200">
+
+                <p class="font-bold text-gray-800">Proctoring Pre-Flight Check:</p>
+
+                <ul class="space-y-1 list-disc list-inside">
+
+                    <li>Camera access will be initialized for live proctoring.</li>
+
+                    <li>The exam will lock into mandatory fullscreen mode.</li>
+
+                    <li>Tab switches, app changes, and exiting fullscreen are logged as anti-cheating events.</li>
+
+                </ul>
+
+            </div>
+
+            <div class="pt-2">
+
+                <button
+
+                    id="btnBeginExam"
+
+                    type="button"
+
+                    class="w-full inline-flex items-center justify-center px-6 py-3.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl font-bold text-base shadow-lg transition transform hover:-translate-y-0.5"
+
+                >
+
+                    <svg class="w-5 h-5 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z"></path>
+
+                    </svg>
+
+                    Start Proctored Examination
+
+                </button>
+
+                <div class="mt-3">
+
+                    <a href="{{ route('student.classrooms.tests.show', [$classroom, $test]) }}" class="text-xs text-gray-500 hover:text-gray-700">
+
+                        ← Cancel and return to overview
+
+                    </a>
+
+                </div>
+
+            </div>
+
+        </div>
+
+    </div>
+
+    <!-- Fullscreen Warning Modal -->
+
+    <div id="fullscreenWarningOverlay" style="display: none;" class="fixed inset-0 z-50 bg-rose-950/90 backdrop-blur-md flex items-center justify-center p-4">
+
+        <div class="bg-white rounded-2xl shadow-2xl max-w-md w-full p-8 text-center space-y-5 border-4 border-rose-500">
+
+            <div class="w-16 h-16 bg-rose-100 text-rose-600 rounded-full flex items-center justify-center mx-auto">
+
+                <svg class="w-8 h-8" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"></path>
+
+                </svg>
+
+            </div>
+
+            <h3 class="text-xl font-bold text-gray-900">Fullscreen Exited!</h3>
+
+            <p id="fullscreenWarningText" class="text-sm text-gray-600">
+
+                You exited fullscreen mode. This suspicious event has been logged to your proctoring audit log. Please return to fullscreen immediately.
+
+            </p>
+
+            <div class="p-3 bg-rose-50 text-rose-700 rounded-lg text-xs font-mono font-bold" id="fsCountdown">
+
+                Returning window closing in: 15s
+
+            </div>
+
+            <button
+
+                id="btnReturnFullscreen"
+
+                type="button"
+
+                class="w-full inline-flex items-center justify-center px-5 py-3 bg-rose-600 hover:bg-rose-700 text-white rounded-xl font-bold text-sm shadow transition"
+
+            >
+
+                Return to Fullscreen
+
+            </button>
+
+        </div>
+
+    </div>
+
+    <!-- Exam Container -->
+
+    <div id="examContainer" class="min-h-screen pb-20">
+
+        <!-- Fixed Top Navigation Bar -->
+
+        <header class="bg-white border-b border-gray-200 sticky top-0 z-30 shadow-sm">
+
+            <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between">
+
+                <div class="flex items-center gap-3">
+
+                    <span class="px-2.5 py-1 rounded bg-emerald-100 text-emerald-800 font-bold text-xs">
+
+                        SECURE EXAM
+
+                    </span>
+
+                    <div>
+
+                        <h1 class="font-bold text-base text-gray-900 line-clamp-1">{{ $test->title }}</h1>
+
+                        <p class="text-[11px] text-gray-500">{{ $classroom->name }} • {{ Auth::user()->name }}</p>
+
+                    </div>
+
+                </div>
+
+                <div class="flex items-center gap-4">
+
+                    <!-- Auto-save status -->
+
+                    <div id="saveStatusIndicator" class="hidden sm:flex items-center text-xs text-gray-500 font-medium">
+
+                        <svg class="w-3.5 h-3.5 mr-1 text-emerald-500" fill="currentColor" viewBox="0 0 20 20">
+
+                            <path fill-rule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clip-rule="evenodd"/>
+
+                        </svg>
+
+                        <span id="saveStatusText">Answers saved</span>
+
+                    </div>
+
+                    <!-- Countdown Timer -->
+
+                    <div class="flex items-center gap-2 px-3.5 py-1.5 bg-gray-900 text-white rounded-xl shadow font-mono text-sm font-bold">
+
+                        <svg class="w-4 h-4 text-emerald-400 animate-pulse" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"></path>
+
+                        </svg>
+
+                        <span id="examTimerDisplay">--:--</span>
+
+                    </div>
+
+                    <button
+
+                        type="button"
+
+                        onclick="document.getElementById('examForm').dispatchEvent(new Event('submit', { cancelable: true, bubbles: true }));"
+
+                        class="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-bold shadow transition"
+
+                    >
+
+                        Submit Exam
+
+                    </button>
+
+                </div>
+
+            </div>
+
+        </header>
+
+        <!-- Main Examination Grid with Sticky Proctoring Sidebar -->
+
+        <main class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+
+            <div class="grid grid-cols-1 lg:grid-cols-4 gap-8">
+
+                <!-- Left Column: Questions Form (3 cols) -->
+
+                <div class="lg:col-span-3 space-y-6">
+
+                    @if ($isLateAttempt)
+
+                        <div class="p-4 bg-amber-50 border-l-4 border-amber-500 rounded-xl text-amber-900 text-xs shadow-sm flex items-center justify-between">
+
+                            <div class="flex items-center gap-2">
+
+                                <svg class="w-5 h-5 text-amber-600 shrink-0" fill="currentColor" viewBox="0 0 20 20">
+
+                                    <path fill-rule="evenodd" d="M8.257 3.099c.765-1.36 2.722-1.36 3.486 0l5.58 9.92c.75 1.334-.213 2.98-1.742 2.98H4.42c-1.53 0-2.493-1.646-1.743-2.98l5.58-9.92zM11 13a1 1 0 11-2 0 1 1 0 012 0zm-1-8a1 1 0 00-1 1v3a1 1 0 002 0V6a1 1 0 00-1-1z" clip-rule="evenodd"/>
+
+                                </svg>
+
+                                <div>
+
+                                    <strong class="font-bold">Late Submission Mode:</strong>
+
+                                    <span>The deadline has passed. Late submissions are permitted and will be flagged as <strong>Submitted Late</strong>.</span>
+
+                                </div>
+
+                            </div>
+
+                            <span class="px-2.5 py-1 bg-amber-200 text-amber-900 font-bold rounded-full uppercase tracking-wider text-[10px]">Late Mode</span>
+
+                        </div>
+
+                    @endif
+
+                    <form id="examForm" method="POST" action="{{ route('student.classrooms.tests.submit', [$classroom, $test]) }}" class="space-y-6">
+
+                        @csrf
+
+                        @foreach ($test->questions as $index => $question)
+
+                            @php
+
+                                $existingAns = $existingAnswers[$question->id] ?? null;
+
+                            @endphp
+
+                            <div class="bg-white rounded-2xl shadow-sm border border-gray-200 p-6 space-y-4">
+
+                                <div class="flex items-start justify-between gap-4 pb-3 border-b border-gray-100">
+
+                                    <div class="flex items-center gap-2">
+
+                                        <span class="w-8 h-8 rounded-full bg-emerald-50 text-emerald-800 font-bold text-sm flex items-center justify-center">
+
+                                            {{ $index + 1 }}
+
+                                        </span>
+
+                                        <span class="text-xs font-semibold uppercase tracking-wider text-gray-500">
+
+                                            {{ $question->isMcq() ? 'Multiple Choice' : 'Text Answer' }}
+
+                                        </span>
+
+                                    </div>
+
+                                    <span class="px-2.5 py-1 rounded bg-gray-100 text-gray-700 font-bold text-xs">
+
+                                        {{ $question->marks }} {{ $question->marks === 1 ? 'Mark' : 'Marks' }}
+
+                                    </span>
+
+                                </div>
+
+                                <div class="text-base font-medium text-gray-900 leading-relaxed whitespace-pre-wrap">
+
+                                    {{ $question->question_text }}
+
+                                </div>
+
+                                @if ($question->isMcq())
+
+                                    <!-- MCQ Options List -->
+
+                                    <div class="space-y-2 pt-2">
+
+                                        @foreach ($question->options as $optIdx => $option)
+
+                                            @php
+
+                                                $checked = ($existingAns && $existingAns->selected_option_id === $option->id);
+
+                                            @endphp
+
+                                            <label class="flex items-center p-3.5 rounded-xl border border-gray-200 hover:border-emerald-500 hover:bg-emerald-50/30 cursor-pointer transition">
+
+                                                <input
+
+                                                    type="radio"
+
+                                                    name="answers[{{ $question->id }}]"
+
+                                                    value="{{ $option->id }}"
+
+                                                    {{ $checked ? 'checked' : '' }}
+
+                                                    class="w-4 h-4 text-emerald-600 focus:ring-emerald-500 border-gray-300"
+
+                                                />
+
+                                                <span class="ml-3 font-semibold text-xs text-gray-500 font-mono">
+
+                                                    {{ chr(65 + $optIdx) }}.
+
+                                                </span>
+
+                                                <span class="ml-2 text-sm text-gray-800">
+
+                                                    {{ $option->option_text }}
+
+                                                </span>
+
+                                            </label>
+
+                                        @endforeach
+
+                                    </div>
+
+                                @else
+
+                                    <!-- Written Text Question -->
+
+                                    <div class="pt-2">
+
+                                        <label for="ans_{{ $question->id }}" class="block text-xs font-semibold text-gray-500 mb-1">
+
+                                            Type your answer below:
+
+                                        </label>
+
+                                        <textarea
+
+                                            id="ans_{{ $question->id }}"
+
+                                            name="answers[{{ $question->id }}]"
+
+                                            rows="5"
+
+                                            class="w-full rounded-xl border-gray-300 focus:border-emerald-500 focus:ring-emerald-500 text-sm placeholder-gray-400 p-3.5"
+
+                                            placeholder="Write your explanation or detailed response here..."
+
+                                        >{{ $existingAns ? $existingAns->text_answer : '' }}</textarea>
+
+                                    </div>
+
+                                @endif
+
+                            </div>
+
+                        @endforeach
+
+                        <div class="bg-white rounded-2xl p-6 border border-gray-200 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+
+                            <span class="text-xs text-gray-500">
+
+                                Completed answering? Ensure all answers are filled before submitting.
+
+                            </span>
+
+                            <button
+
+                                type="submit"
+
+                                class="inline-flex items-center justify-center px-8 py-3 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl font-bold text-sm shadow-md transition"
+
+                            >
+
+                                <svg class="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"></path>
+
+                                </svg>
+
+                                Submit Examination
+
+                            </button>
+
+                        </div>
+
+                    </form>
+
+                </div>
+
+                <!-- Right Column: Sticky Proctoring Widget (1 col) -->
+
+                <div class="space-y-6">
+
+                    <!-- Live Proctoring Card -->
+
+                    <div class="bg-white rounded-2xl shadow-sm border border-gray-200 p-5 sticky top-24 space-y-4">
+
+                        <div class="flex items-center justify-between pb-3 border-b border-gray-100">
+
+                            <div class="flex items-center gap-2">
+
+                                <span class="w-2.5 h-2.5 rounded-full bg-emerald-500 animate-ping"></span>
+
+                                <h3 class="font-bold text-xs uppercase tracking-wider text-gray-700">Live Proctoring</h3>
+
+                            </div>
+
+                            <span id="camBadge" class="text-[11px] font-semibold px-2 py-0.5 rounded bg-emerald-50 text-emerald-700">
+
+                                Camera Ready
+
+                            </span>
+
+                        </div>
+
+                        <!-- Webcam Preview -->
+
+                        <div class="relative rounded-xl overflow-hidden bg-black aspect-video flex items-center justify-center">
+
+                            <video
+
+                                id="webcamPreview"
+
+                                autoplay
+
+                                playsinline
+
+                                muted
+
+                                class="w-full h-full object-cover"
+
+                            ></video>
+
+                            <span id="camOverlayStatus" class="absolute bottom-2 left-2 text-[10px] px-2 py-0.5 rounded bg-black/60 text-white backdrop-blur">
+
+                                Monitoring Stream
+
+                            </span>
+
+                        </div>
+
+                        <!-- Proctoring Status Indicators -->
+
+                        <div class="space-y-2 text-xs">
+
+                            <div class="flex items-center justify-between p-2 rounded-lg bg-gray-50">
+
+                                <span class="text-gray-500">Camera Feed</span>
+
+                                <span id="cameraStatusText" class="font-semibold text-emerald-600">Active</span>
+
+                            </div>
+
+                            <div class="flex items-center justify-between p-2 rounded-lg bg-gray-50">
+
+                                <span class="text-gray-500">Fullscreen Lock</span>
+
+                                <span id="fullscreenStatusText" class="font-semibold text-emerald-600">Enforced</span>
+
+                            </div>
+
+                            <div class="flex items-center justify-between p-2 rounded-lg bg-gray-50">
+
+                                <span class="text-gray-500">Tab Focus</span>
+
+                                <span id="focusStatusText" class="font-semibold text-emerald-600">Normal</span>
+
+                            </div>
+
+                        </div>
+
+                        <p class="text-[11px] text-gray-400 text-center leading-relaxed">
+
+                            Proctoring engine logs camera disconnects, gaze tracking, and application switching automatically.
+
+                        </p>
+
+                    </div>
+
+                </div>
+
+            </div>
+
+        </main>
+
+    </div>
+
+    <!-- Proctoring & Timer Scripts -->
+
+    <script>
+
+        const durationMinutes = {{ $test->duration_minutes }};
+
+        let remainingTimeSeconds = {{ $remainingSeconds }};
+
+        let timerInterval = null;
+
+        let isExamStarted = false;
+
+        let isSubmitting = false;
+
+        const saveAnswerUrl = "{{ route('student.classrooms.tests.save-answer', [$classroom, $test]) }}";
+
+        const csrfToken = document.querySelector('meta[name="csrf-token"]').getAttribute('content');
+
+        const webcam = document.getElementById('webcamPreview');
+
+        const startOverlay = document.getElementById('startOverlay');
+
+        const btnBeginExam = document.getElementById('btnBeginExam');
+
+        const fullscreenWarningOverlay = document.getElementById('fullscreenWarningOverlay');
+
+        const btnReturnFullscreen = document.getElementById('btnReturnFullscreen');
+
+        const fsCountdown = document.getElementById('fsCountdown');
+
+        const timerDisplay = document.getElementById('examTimerDisplay');
+
+        const examForm = document.getElementById('examForm');
+
+        let fsWarningTimer = null;
+
+        let fsWarningSeconds = 15;
+
+        // =========================================
+
+        // CLIPBOARD BLOCKING (COPY / CUT / PASTE)
+
+        // =========================================
+
+        document.addEventListener('copy', function (event) {
+
+            event.preventDefault();
+
+            console.log('Copy blocked in SecureTest.');
+
+        });
+
+        document.addEventListener('cut', function (event) {
+
+            event.preventDefault();
+
+            console.log('Cut blocked in SecureTest.');
+
+        });
+
+        document.addEventListener('paste', function (event) {
+
+            event.preventDefault();
+
+            console.log('Paste blocked in SecureTest.');
+
+        });
+
+        // Check if webcam video stream track is live and enabled
+
+        function isCameraStreamLive() {
+
+            if (!webcam || !webcam.srcObject) return false;
+
+            const stream = webcam.srcObject;
+
+            const tracks = stream.getVideoTracks();
+
+            if (!tracks || tracks.length === 0) return false;
+
+            return tracks[0].readyState === 'live' && tracks[0].enabled;
+
+        }
+
+        // Initialize Camera
+
+        async function initCamera() {
+
+            try {
+
+                const stream = await navigator.mediaDevices.getUserMedia({
+
+                    video: { width: { ideal: 640 }, height: { ideal: 480 } },
+
+                    audio: false
+
+                });
+
+                webcam.srcObject = stream;
+
+                try {
+
+                    await webcam.play();
+
+                } catch (playErr) {
+
+                    console.warn('Webcam playback error:', playErr);
+
+                }
+
+                const cameraStatusText = document.getElementById('cameraStatusText');
+
+                if (cameraStatusText) {
+
+                    cameraStatusText.textContent = 'Active';
+
+                    cameraStatusText.className = 'font-semibold text-emerald-600';
+
+                }
+
+                // Handle camera stream termination (unplugged, disabled, or revoked)
+
+                const videoTrack = stream.getVideoTracks()[0];
+
+                if (videoTrack) {
+
+                    videoTrack.onended = function () {
+
+                        console.warn('Camera stopped or disconnected.');
+
+                        if (cameraStatusText) {
+
+                            cameraStatusText.textContent = 'Disconnected';
+
+                            cameraStatusText.className = 'font-semibold text-rose-600';
+
+                        }
+
+                        const camOverlayStatus = document.getElementById('camOverlayStatus');
+
+                        if (camOverlayStatus) {
+
+                            camOverlayStatus.textContent = '⚠️ Camera Disconnected';
+
+                        }
+
+                        reportCheatingEvent('camera_disconnected', 'Webcam stream disconnected or access revoked.');
+
+                        const fullscreenWarningOverlay = document.getElementById('fullscreenWarningOverlay');
+
+                        const fullscreenWarningText = document.getElementById('fullscreenWarningText');
+
+                        if (fullscreenWarningOverlay && fullscreenWarningText) {
+
+                            fullscreenWarningText.textContent = 'Camera stream was stopped or disconnected. Live webcam access is required to continue the examination.';
+
+                            fullscreenWarningOverlay.style.display = 'flex';
+
+                        }
+
+                    };
+
+                }
+
+                return true;
+
+            } catch (err) {
+
+                console.error('Camera access error:', err);
+
+                const cameraStatusText = document.getElementById('cameraStatusText');
+
+                if (cameraStatusText) {
+
+                    cameraStatusText.textContent = 'Permission Denied';
+
+                    cameraStatusText.className = 'font-semibold text-rose-600';
+
+                }
+
+                alert('Camera access is strictly required to undertake this examination. Please allow camera permissions.');
+
+                return false;
+
+            }
+
+        }
+
+        const attemptId = {{ $attempt->id }};
+
+        // Allowed face-related event types that can capture a webcam frame screenshot
+
+        const SCREENSHOT_EVENT_TYPES = ['no_face_detected', 'multiple_faces_detected', 'abnormal_eye_movement'];
+
+        // Send Cheating Event helper with exam_attempt_id and frame screenshot
+
+        async function reportCheatingEvent(eventType, description = '') {
+
+            try {
+
+                const formData = new FormData();
+
+                formData.append('event_type', eventType);
+
+                formData.append('exam_attempt_id', attemptId);
+
+                if (description) {
+
+                    formData.append('description', description);
+
+                }
+
+                // Strictly capture webcam frame ONLY for face-related anomalies (never tab_switch or fullscreen events)
+
+                const shouldCaptureScreenshot = SCREENSHOT_EVENT_TYPES.includes(eventType);
+
+                if (shouldCaptureScreenshot && webcam && webcam.videoWidth && webcam.videoHeight && eventType !== 'face_normal') {
+
+                    try {
+
+                        const canvas = document.createElement('canvas');
+
+                        canvas.width = webcam.videoWidth;
+
+                        canvas.height = webcam.videoHeight;
+
+                        const ctx = canvas.getContext('2d');
+
+                        ctx.drawImage(webcam, 0, 0, canvas.width, canvas.height);
+
+                        const blob = await new Promise(resolve => canvas.toBlob(resolve, 'image/jpeg', 0.85));
+
+                        if (blob) {
+
+                            formData.append('evidence', blob, `${eventType}_${Date.now()}.jpg`);
+
+                        }
+
+                    } catch (snapErr) {
+
+                        console.warn('Canvas frame capture error:', snapErr);
+
+                    }
+
+                }
+
+                const response = await fetch('/cheating-event', {
+
+                    method: 'POST',
+
+                    headers: {
+
+                        'X-CSRF-TOKEN': csrfToken,
+
+                        'Accept': 'application/json'
+
+                    },
+
+                    body: formData
+
+                });
+
+                return await response.json();
+
+            } catch (e) {
+
+                console.warn('Failed to log proctoring event:', e);
+
+            }
+
+        }
+
+        // Face & Gaze Detection State
+
+        let faceDetectionRunning = false;
+
+        let eyeDetectionRunning = false;
+
+        let isFaceLoopRunning = false;
+
+        let isEyeLoopRunning = false;
+
+        let noFaceStartTime = null;
+
+        let multipleFaceStartTime = null;
+
+        let noFaceEventSent = false;
+
+        let multipleFaceEventSent = false;
+
+        let faceEventActive = false;
+
+        let abnormalGazeStartTime = null;
+
+        let abnormalGazeEventSent = false;
+
+        let lastAbnormalGazeEventTime = 0;
+
+        let lastFaceDetectorTimestamp = -1;
+
+        let lastLandmarkerTimestamp = -1;
+
+        const NO_FACE_CONFIRMATION_TIME = 2000;
+
+        const MULTIPLE_FACE_CONFIRMATION_TIME = 2000;
+
+        const GAZE_CONFIRMATION_TIME = 3000; // 3 continuous seconds before reporting
+
+        const GAZE_COOLDOWN_TIME = 10000;    // 10 seconds debounce cooldown
+
+        // Start Face Detection independently as soon as window.faceDetector is ready
+
+        async function startFaceDetection() {
+
+            if (isFaceLoopRunning) return;
+
+            while (!window.faceDetector) {
+
+                await new Promise(r => setTimeout(r, 100));
+
+            }
+
+            faceDetectionRunning = true;
+
+            isFaceLoopRunning = true;
+
+            detectFaces();
+
+        }
+
+        // Start Eye/Gaze Monitoring independently as soon as window.faceLandmarker is ready
+
+        function startEyeMonitoring() {
+
+            if (isEyeLoopRunning) return;
+
+            eyeDetectionRunning = true;
+
+            isEyeLoopRunning = true;
+
+            detectEyeLandmarks();
+
+        }
+
+        function detectFaces() {
+
+            if (!faceDetectionRunning || !isExamStarted || isSubmitting) {
+
+                isFaceLoopRunning = false;
+
+                return;
+
+            }
+
+            if (!window.faceDetector || !webcam.videoWidth || !webcam.videoHeight) {
+
+                requestAnimationFrame(detectFaces);
+
+                return;
+
+            }
+
+            try {
+
+                let timestamp = performance.now();
+
+                if (timestamp <= lastFaceDetectorTimestamp) {
+
+                    timestamp = lastFaceDetectorTimestamp + 1;
+
+                }
+
+                lastFaceDetectorTimestamp = timestamp;
+
+                const result = window.faceDetector.detectForVideo(webcam, timestamp);
+
+                const detections = result.detections || [];
+
+                const faceCount = detections.length;
+
+                const camOverlayStatus = document.getElementById('camOverlayStatus');
+
+                if (faceCount === 0) {
+
+                    if (camOverlayStatus) camOverlayStatus.textContent = '⚠️ No Face Detected';
+
+                    if (noFaceStartTime === null) noFaceStartTime = Date.now();
+
+                    multipleFaceStartTime = null;
+
+                    multipleFaceEventSent = false;
+
+                    const duration = Date.now() - noFaceStartTime;
+
+                    if (duration >= NO_FACE_CONFIRMATION_TIME && !noFaceEventSent) {
+
+                        noFaceEventSent = true;
+
+                        faceEventActive = true;
+
+                        reportCheatingEvent('no_face_detected', 'No face detected in webcam stream.');
+
+                    }
+
+                } else if (faceCount === 1) {
+
+                    if (camOverlayStatus) camOverlayStatus.textContent = '✅ 1 Face Verified';
+
+                    if (faceEventActive) {
+
+                        reportCheatingEvent('face_normal', 'Normal single face verified.');
+
+                        faceEventActive = false;
+
+                    }
+
+                    noFaceStartTime = null;
+
+                    noFaceEventSent = false;
+
+                    multipleFaceStartTime = null;
+
+                    multipleFaceEventSent = false;
+
+                } else {
+
+                    if (camOverlayStatus) camOverlayStatus.textContent = '🚨 Multiple Faces: ' + faceCount;
+
+                    if (multipleFaceStartTime === null) multipleFaceStartTime = Date.now();
+
+                    noFaceStartTime = null;
+
+                    noFaceEventSent = false;
+
+                    const duration = Date.now() - multipleFaceStartTime;
+
+                    if (duration >= MULTIPLE_FACE_CONFIRMATION_TIME && !multipleFaceEventSent) {
+
+                        multipleFaceEventSent = true;
+
+                        faceEventActive = true;
+
+                        reportCheatingEvent('multiple_faces_detected', `Multiple faces (${faceCount}) detected in webcam stream.`);
+
+                    }
+
+                }
+
+            } catch (err) {
+
+                console.error('Face detection frame error:', err);
+
+            }
+
+            requestAnimationFrame(detectFaces);
+
+        }
+
+        function detectEyeLandmarks() {
+    console.log('GAZE FUNCTION STARTED');
+
+            if (!eyeDetectionRunning || !isExamStarted || isSubmitting) {
+
+                isEyeLoopRunning = false;
+
+                return;
+
+            }
+
+            if (!window.faceLandmarker || !webcam.videoWidth || !webcam.videoHeight) {
+
+                requestAnimationFrame(detectEyeLandmarks);
+
+                return;
+
+            }
+
+            try {
+
+                let timestamp = performance.now();
+
+                if (timestamp <= lastLandmarkerTimestamp) {
+
+                    timestamp = lastLandmarkerTimestamp + 1;
+
+                }
+
+                lastLandmarkerTimestamp = timestamp;
+
+                const result = window.faceLandmarker.detectForVideo(webcam, timestamp);
+
+                
+                // If no landmarks detected, reset timer safely without flagging cheating
+
+                if (!result.faceLandmarks || result.faceLandmarks.length === 0) {
+
+                    abnormalGazeStartTime = null;
+
+                    abnormalGazeEventSent = false;
+
+                    requestAnimationFrame(detectEyeLandmarks);
+
+                    return;
+
+                }
+
+                const landmarks = result.faceLandmarks[0];
+
+                // Screen left eye (subject's right): inner 133, outer 33, top 159, bottom 145
+
+                // Screen right eye (subject's left): inner 362, outer 263, top 386, bottom 374
+
+                const leftMinX = Math.min(landmarks[33].x, landmarks[133].x);
+
+                const leftMaxX = Math.max(landmarks[33].x, landmarks[133].x);
+
+                const leftWidth = leftMaxX - leftMinX;
+
+                const rightMinX = Math.min(landmarks[362].x, landmarks[263].x);
+
+                const rightMaxX = Math.max(landmarks[362].x, landmarks[263].x);
+
+                const rightWidth = rightMaxX - rightMinX;
+
+                const leftMinY = Math.min(landmarks[159].y, landmarks[145].y);
+
+                const leftMaxY = Math.max(landmarks[159].y, landmarks[145].y);
+
+                const leftHeight = leftMaxY - leftMinY;
+
+                const rightMinY = Math.min(landmarks[386].y, landmarks[374].y);
+
+                const rightMaxY = Math.max(landmarks[386].y, landmarks[374].y);
+
+                const rightHeight = rightMaxY - rightMinY;
+
+                // Handle unreliable or non-positive dimensions safely
+
+                if (leftWidth <= 0.001 || rightWidth <= 0.001 || leftHeight <= 0.0005 || rightHeight <= 0.0005) {
+
+                    abnormalGazeStartTime = null;
+
+                    abnormalGazeEventSent = false;
+
+                    requestAnimationFrame(detectEyeLandmarks);
+
+                    return;
+
+                }
+
+                // Check for normal blinking (Eye Aspect Ratio < 0.12)
+
+                const leftEAR = leftHeight / leftWidth;
+
+                const rightEAR = rightHeight / rightWidth;
+
+                const isBlinking = leftEAR < 0.12 || rightEAR < 0.12;
+
+                if (isBlinking) {
+
+                    // Natural blinks must not accumulate toward abnormal gaze
+
+                    abnormalGazeStartTime = null;
+
+                    requestAnimationFrame(detectEyeLandmarks);
+
+                    return;
+
+                }
+
+                function getCenter(points) {
+
+                    let x = 0, y = 0;
+
+                    points.forEach(p => { x += p.x; y += p.y; });
+
+                    return { x: x / points.length, y: y / points.length };
+
+                }
+
+                const leftIris = [landmarks[468], landmarks[469], landmarks[470], landmarks[471], landmarks[472]];
+
+                const rightIris = [landmarks[473], landmarks[474], landmarks[475], landmarks[476], landmarks[477]];
+
+                const leftIrisCenter = getCenter(leftIris);
+
+                const rightIrisCenter = getCenter(rightIris);
+
+                // Symmetric horizontal gaze ratio in image coordinate space (0 = image left, 1 = image right)
+
+                const leftGazeX = (leftIrisCenter.x - leftMinX) / leftWidth;
+
+                const rightGazeX = (rightIrisCenter.x - rightMinX) / rightWidth;
+
+                const avgGazeX = (leftGazeX + rightGazeX) / 2;
+
+                // Vertical gaze ratio (0 = top, 1 = bottom)
+
+                const leftGazeY = (leftIrisCenter.y - leftMinY) / leftHeight;
+
+                const rightGazeY = (rightIrisCenter.y - rightMinY) / rightHeight;
+
+                const avgGazeY = (leftGazeY + rightGazeY) / 2;
+
+                // Abnormal gaze: looking left (<0.28), looking right (>0.72), looking down at lap/phone (>0.78), or up (<0.20)
+
+                const isLookingHorizontal = avgGazeX < 0.28 || avgGazeX > 0.72;
+
+                const isLookingVertical = avgGazeY < 0.20 || avgGazeY > 0.78;
+
+                const isLookingAway = isLookingHorizontal || isLookingVertical;
+
+                const now = Date.now();
+
+                if (isLookingAway) {
+
+                    if (abnormalGazeStartTime === null) {
+
+                        abnormalGazeStartTime = now;
+
+                    }
+
+                    const gazeDuration = now - abnormalGazeStartTime;
+
+                    const isCooldownActive = (now - lastAbnormalGazeEventTime) < GAZE_COOLDOWN_TIME;
+
+                    if (gazeDuration >= GAZE_CONFIRMATION_TIME && !abnormalGazeEventSent && !isCooldownActive) {
+
+                        abnormalGazeEventSent = true;
+
+                        lastAbnormalGazeEventTime = now;
+
+                        reportCheatingEvent('abnormal_eye_movement', 'Sustained abnormal eye/gaze deviation (3+ seconds).');
+
+                    }
+
+                } else {
+
+                    // Reset timer immediately when gaze returns to normal region
+
+                    abnormalGazeStartTime = null;
+
+                    abnormalGazeEventSent = false;
+
+                }
+
+            } catch (gazeErr) {
+
+                console.error('Gaze tracking error:', gazeErr);
+
+            }
+
+            requestAnimationFrame(detectEyeLandmarks);
+
+        }
+
+        // Start Countdown Timer
+
+        function startTimer() {
+
+            function updateTimerDisplay() {
+
+                const minutes = Math.floor(remainingTimeSeconds / 60);
+
+                const seconds = remainingTimeSeconds % 60;
+
+                timerDisplay.textContent =
+
+                    String(minutes).padStart(2, '0') + ':' + String(seconds).padStart(2, '0');
+
+                if (remainingTimeSeconds <= 300) { // 5 minutes warning
+
+                    timerDisplay.classList.add('text-rose-400');
+
+                }
+
+                if (remainingTimeSeconds <= 0) {
+
+                    clearInterval(timerInterval);
+
+                    alert('Time has expired! Submitting your examination answers now.');
+
+                    isSubmitting = true;
+
+                    examForm.submit();
+
+                }
+
+                remainingTimeSeconds--;
+
+            }
+
+            updateTimerDisplay();
+
+            timerInterval = setInterval(updateTimerDisplay, 1000);
+
+        }
+
+        // Begin Exam Click Handler
+
+        btnBeginExam.addEventListener('click', async function () {
+
+            const camOk = await initCamera();
+
+            if (!camOk) return;
+
+            try {
+
+                if (document.documentElement.requestFullscreen) {
+
+                    await document.documentElement.requestFullscreen();
+
+                }
+
+            } catch (fsErr) {
+
+                console.warn('Fullscreen request bypassed or failed:', fsErr);
+
+            }
+
+            startOverlay.style.display = 'none';
+
+            isExamStarted = true;
+
+            startTimer();
+
+            startFaceDetection();
+
+            startEyeMonitoring();
+
+        });
+
+        // Fullscreen Change Listener
+
+        document.addEventListener('fullscreenchange', function () {
+
+            if (!isExamStarted || isSubmitting) return;
+
+            if (!document.fullscreenElement) {
+
+                // User exited fullscreen
+
+                reportCheatingEvent('fullscreen_exit', 'Student exited fullscreen during exam attempt.');
+
+                document.getElementById('fullscreenStatusText').textContent = 'Exited (Alert)';
+
+                document.getElementById('fullscreenStatusText').className = 'font-semibold text-rose-600';
+
+                const fullscreenWarningText = document.getElementById('fullscreenWarningText');
+
+                if (fullscreenWarningText) {
+
+                    fullscreenWarningText.textContent = 'You exited fullscreen mode. This suspicious event has been logged to your proctoring audit log. Please return to fullscreen immediately.';
+
+                }
+
+                fullscreenWarningOverlay.style.display = 'flex';
+
+                fsWarningSeconds = 15;
+
+                fsCountdown.textContent = 'Returning window closing in: 15s';
+
+                clearInterval(fsWarningTimer);
+
+                fsWarningTimer = setInterval(function () {
+
+                    fsWarningSeconds--;
+
+                    fsCountdown.textContent = 'Returning window closing in: ' + fsWarningSeconds + 's';
+
+                    if (fsWarningSeconds <= 0) {
+
+                        clearInterval(fsWarningTimer);
+
+                        reportCheatingEvent('fullscreen_timeout', 'Student failed to return to fullscreen within 15 seconds.');
+
+                    }
+
+                }, 1000);
+
+            } else {
+
+                // Returned to fullscreen
+
+                fullscreenWarningOverlay.style.display = 'none';
+
+                clearInterval(fsWarningTimer);
+
+                document.getElementById('fullscreenStatusText').textContent = 'Enforced';
+
+                document.getElementById('fullscreenStatusText').className = 'font-semibold text-emerald-600';
+
+            }
+
+        });
+
+        btnReturnFullscreen.addEventListener('click', async function () {
+
+            // Before allowing student to resume after fullscreen exit, verify camera stream is still live
+
+            if (!isCameraStreamLive()) {
+
+                const camOk = await initCamera();
+
+                if (!camOk) {
+
+                    alert('Camera access is required to resume the examination.');
+
+                    return;
+
+                }
+
+                startFaceDetection();
+
+                startEyeMonitoring();
+
+            }
+
+            try {
+
+                if (document.documentElement.requestFullscreen) {
+
+                    await document.documentElement.requestFullscreen();
+
+                }
+
+            } catch (e) {
+
+                console.error('Failed to restore fullscreen:', e);
+
+            }
+
+            fullscreenWarningOverlay.style.display = 'none';
+
+            clearInterval(fsWarningTimer);
+
+        });
+
+        // Tab Switching & Blur Tracking
+
+        document.addEventListener('visibilitychange', function () {
+
+            if (!isExamStarted || isSubmitting) return;
+
+            if (document.visibilityState === 'hidden') {
+
+                document.getElementById('focusStatusText').textContent = 'Tab Switched';
+
+                document.getElementById('focusStatusText').className = 'font-semibold text-rose-600';
+
+                reportCheatingEvent('tab_switch', 'Student switched browser tab or minimized window.');
+
+            } else {
+
+                document.getElementById('focusStatusText').textContent = 'Normal';
+
+                document.getElementById('focusStatusText').className = 'font-semibold text-emerald-600';
+
+            }
+
+        });
+
+        // Form Submit Confirmation
+
+        examForm.addEventListener('submit', function (e) {
+
+            if (!isSubmitting) {
+
+                const confirmed = confirm('Are you sure you want to finish and submit your examination? Once submitted, your answers cannot be changed.');
+
+                if (!confirmed) {
+
+                    e.preventDefault();
+
+                    return;
+
+                }
+
+            }
+
+            isSubmitting = true;
+
+        });
+
+        // Progressive Answer Auto-Save
+
+        const saveStatusText = document.getElementById('saveStatusText');
+
+        let saveTimeout = null;
+
+        function saveAnswerProgress(payload) {
+
+            if (saveStatusText) saveStatusText.textContent = 'Saving...';
+
+            fetch(saveAnswerUrl, {
+
+                method: 'POST',
+
+                headers: {
+
+                    'Content-Type': 'application/json',
+
+                    'X-CSRF-TOKEN': csrfToken,
+
+                    'Accept': 'application/json'
+
+                },
+
+                body: JSON.stringify(payload)
+
+            })
+
+            .then(res => res.json())
+
+            .then(data => {
+
+                if (saveStatusText) saveStatusText.textContent = 'Answers saved';
+
+            })
+
+            .catch(err => {
+
+                console.warn('Auto-save network error:', err);
+
+                if (saveStatusText) saveStatusText.textContent = 'Retrying save...';
+
+            });
+
+        }
+
+        // Auto-save on MCQ option selection
+
+        document.querySelectorAll('input[type="radio"][name^="answers["]').forEach(radio => {
+
+            radio.addEventListener('change', function () {
+
+                const match = this.name.match(/answers\[(\d+)\]/);
+
+                if (match) {
+
+                    const questionId = parseInt(match[1]);
+
+                    saveAnswerProgress({
+
+                        question_id: questionId,
+
+                        selected_option_id: parseInt(this.value)
+
+                    });
+
+                }
+
+            });
+
+        });
+
+        // Auto-save on Written Text response (debounced 500ms)
+
+        document.querySelectorAll('textarea[name^="answers["]').forEach(textarea => {
+
+            textarea.addEventListener('input', function () {
+
+                const match = this.name.match(/answers\[(\d+)\]/);
+
+                if (match) {
+
+                    const questionId = parseInt(match[1]);
+
+                    const val = this.value;
+
+                    clearTimeout(saveTimeout);
+
+                    saveTimeout = setTimeout(() => {
+
+                        saveAnswerProgress({
+
+                            question_id: questionId,
+
+                            text_answer: val
+
+                        });
+
+                    }, 500);
+
+                }
+
+            });
+
+        });
+
+    </script>
+
+</body>
+
+</html>

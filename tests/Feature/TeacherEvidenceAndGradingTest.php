@@ -1,0 +1,1562 @@
+<?php
+
+namespace Tests\Feature;
+
+use App\Http\Middleware\CheckActiveSession;
+use App\Models\CheatingEvent;
+use App\Models\Classroom;
+use App\Models\ClassroomTest;
+use App\Models\ExamAttempt;
+use App\Models\Question;
+use App\Models\QuestionOption;
+use App\Models\StudentAnswer;
+use App\Models\Test;
+use App\Models\User;
+use Carbon\Carbon;
+use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Http\UploadedFile;
+use Illuminate\Support\Facades\Storage;
+use Tests\TestCase;
+
+class TeacherEvidenceAndGradingTest extends TestCase
+{
+    use RefreshDatabase;
+
+    private User $teacher;
+    private User $otherTeacher;
+    private User $student;
+    private Classroom $classroom;
+    private Test $mixedTest;
+    private Question $mcqQuestion;
+    private QuestionOption $correctOption;
+    private QuestionOption $wrongOption;
+    private Question $textQuestion;
+    private ClassroomTest $assignment;
+
+    protected function setUp(): void
+    {
+        parent::setUp();
+
+        $this->withoutMiddleware(CheckActiveSession::class);
+
+        // Create Users
+        $this->teacher = User::create([
+            'name' => 'Prof. Alan Turing',
+            'email' => 'turing@securetest.local',
+            'password' => bcrypt('password123'),
+            'role' => User::ROLE_TEACHER,
+            'email_verified_at' => now(),
+        ]);
+
+        $this->otherTeacher = User::create([
+            'name' => 'Prof. John McCarthy',
+            'email' => 'mccarthy@securetest.local',
+            'password' => bcrypt('password123'),
+            'role' => User::ROLE_TEACHER,
+            'email_verified_at' => now(),
+        ]);
+
+        $this->student = User::create([
+            'name' => 'Claude Shannon',
+            'email' => 'shannon@securetest.local',
+            'password' => bcrypt('password123'),
+            'role' => User::ROLE_STUDENT,
+            'email_verified_at' => now(),
+        ]);
+
+        // Create Classroom
+        $this->classroom = Classroom::create([
+            'user_id' => $this->teacher->id,
+            'name' => 'Information Theory & Cryptography',
+            'code' => 'INFO101',
+        ]);
+        $this->classroom->students()->attach($this->student->id);
+
+        // Create Mixed Test (1 MCQ [5 marks], 1 Written [10 marks])
+        $this->mixedTest = Test::create([
+            'user_id' => $this->teacher->id,
+            'title' => 'Cryptography Midterm',
+            'description' => 'Comprehensive exam covering symmetric ciphers and entropy.',
+            'duration_minutes' => 60,
+            'total_marks' => 15,
+        ]);
+
+        $this->mcqQuestion = Question::create([
+            'test_id' => $this->mixedTest->id,
+            'question_type' => Question::TYPE_MCQ,
+            'question_text' => 'What is the block size of AES?',
+            'marks' => 5,
+            'order' => 1,
+        ]);
+
+        $this->correctOption = QuestionOption::create([
+            'question_id' => $this->mcqQuestion->id,
+            'option_text' => '128 bits',
+            'is_correct' => true,
+        ]);
+
+        $this->wrongOption = QuestionOption::create([
+            'question_id' => $this->mcqQuestion->id,
+            'option_text' => '64 bits',
+            'is_correct' => false,
+        ]);
+
+        $this->textQuestion = Question::create([
+            'test_id' => $this->mixedTest->id,
+            'question_type' => Question::TYPE_TEXT,
+            'question_text' => 'Explain the concept of Shannon Entropy and its significance in cryptography.',
+            'marks' => 10,
+            'order' => 2,
+        ]);
+
+        $this->classroom->tests()->attach($this->mixedTest->id, [
+            'starts_at' => Carbon::now()->subHour(),
+            'due_at' => Carbon::now()->addHours(2),
+            'allow_late_submissions' => true,
+            'is_active' => true,
+        ]);
+
+        $this->assignment = ClassroomTest::where('classroom_id', $this->classroom->id)
+            ->where('test_id', $this->mixedTest->id)
+            ->firstOrFail();
+    }
+
+    /**
+     * 1. Teacher owner can view the grade and evidence review page for a student attempt.
+     */
+    public function test_teacher_can_view_grade_and_evidence_review_page(): void
+    {
+        $startedAt = Carbon::now()->subMinutes(40);
+        $submittedAt = Carbon::now()->subMinutes(10);
+
+        $attempt = ExamAttempt::create([
+            'classroom_id' => $this->classroom->id,
+            'test_id' => $this->mixedTest->id,
+            'user_id' => $this->student->id,
+            'status' => ExamAttempt::STATUS_SUBMITTED,
+            'score' => 5,
+            'total_marks' => 15,
+            'started_at' => $startedAt,
+            'submitted_at' => $submittedAt,
+        ]);
+
+        // Create an associated cheating event
+        $event = CheatingEvent::create([
+            'user_id' => $this->student->id,
+            'exam_attempt_id' => $attempt->id,
+            'event_type' => 'tab_switch',
+            'suspicion_score' => 2,
+            'occurred_at' => $startedAt->copy()->addMinutes(15),
+        ]);
+
+        $this->actingAs($this->teacher);
+
+        $response = $this->get(route('teacher.classrooms.tests.attempts.grade', [
+            $this->classroom,
+            $this->mixedTest,
+            $attempt,
+        ]));
+
+        $response->assertOk();
+        $response->assertSee('Review & Grade: Claude Shannon', false);
+        $response->assertSee('Tab Switch');
+        $response->assertSee('Objective Anomaly Review Guideline');
+        $response->assertSee('Explain the concept of Shannon Entropy');
+    }
+
+    /**
+     * 2. Other teacher cannot access grading and evidence review of another teacher's classroom.
+     */
+    public function test_other_teacher_cannot_access_grading_page(): void
+    {
+        $attempt = ExamAttempt::create([
+            'classroom_id' => $this->classroom->id,
+            'test_id' => $this->mixedTest->id,
+            'user_id' => $this->student->id,
+            'status' => ExamAttempt::STATUS_SUBMITTED,
+            'score' => 5,
+            'total_marks' => 15,
+            'started_at' => Carbon::now()->subMinutes(30),
+            'submitted_at' => Carbon::now()->subMinutes(10),
+        ]);
+
+        $this->actingAs($this->otherTeacher);
+
+        $response = $this->get(route('teacher.classrooms.tests.attempts.grade', [
+            $this->classroom,
+            $this->mixedTest,
+            $attempt,
+        ]));
+
+        $response->assertForbidden();
+    }
+
+    /**
+     * 3. Student cannot access teacher grading page.
+     */
+    public function test_student_cannot_access_teacher_grading_page(): void
+    {
+        $attempt = ExamAttempt::create([
+            'classroom_id' => $this->classroom->id,
+            'test_id' => $this->mixedTest->id,
+            'user_id' => $this->student->id,
+            'status' => ExamAttempt::STATUS_SUBMITTED,
+            'score' => 5,
+            'total_marks' => 15,
+            'started_at' => Carbon::now()->subMinutes(30),
+            'submitted_at' => Carbon::now()->subMinutes(10),
+        ]);
+
+        $this->actingAs($this->student);
+
+        $response = $this->get(route('teacher.classrooms.tests.attempts.grade', [
+            $this->classroom,
+            $this->mixedTest,
+            $attempt,
+        ]));
+
+        $response->assertForbidden();
+    }
+
+    /**
+     * 4. Cheating events association: verifies direct attempt ID links and precise window matching for legacy events.
+     */
+    public function test_cheating_events_direct_and_window_matching_on_attempt(): void
+    {
+        $startedAt = Carbon::now()->subMinutes(50);
+        $submittedAt = Carbon::now()->subMinutes(10);
+
+        $attempt = ExamAttempt::create([
+            'classroom_id' => $this->classroom->id,
+            'test_id' => $this->mixedTest->id,
+            'user_id' => $this->student->id,
+            'status' => ExamAttempt::STATUS_SUBMITTED,
+            'score' => 5,
+            'total_marks' => 15,
+            'started_at' => $startedAt,
+            'submitted_at' => $submittedAt,
+        ]);
+
+        // Event 1: Directly linked via exam_attempt_id
+        $directEvent = CheatingEvent::create([
+            'user_id' => $this->student->id,
+            'exam_attempt_id' => $attempt->id,
+            'event_type' => 'fullscreen_exit',
+            'suspicion_score' => 5,
+            'occurred_at' => $startedAt->copy()->addMinutes(10),
+        ]);
+
+        // Event 2: Legacy event (null exam_attempt_id) within attempt time window for same student
+        $legacyWithinWindow = CheatingEvent::create([
+            'user_id' => $this->student->id,
+            'exam_attempt_id' => null,
+            'event_type' => 'no_face_detected',
+            'suspicion_score' => 2,
+            'occurred_at' => $startedAt->copy()->addMinutes(20),
+        ]);
+
+        // Event 3: Legacy event for same student but occurred BEFORE attempt started
+        $legacyBeforeWindow = CheatingEvent::create([
+            'user_id' => $this->student->id,
+            'exam_attempt_id' => null,
+            'event_type' => 'tab_switch',
+            'suspicion_score' => 1,
+            'occurred_at' => $startedAt->copy()->subMinutes(30),
+        ]);
+
+        // Event 4: Legacy event for different student within the same timeframe
+        $legacyOtherStudent = CheatingEvent::create([
+            'user_id' => $this->otherTeacher->id,
+            'exam_attempt_id' => null,
+            'event_type' => 'multiple_faces_detected',
+            'suspicion_score' => 3,
+            'occurred_at' => $startedAt->copy()->addMinutes(15),
+        ]);
+
+        $associatedEvents = $attempt->associatedCheatingEvents();
+
+        $this->assertTrue($associatedEvents->contains('id', $directEvent->id));
+        $this->assertTrue($associatedEvents->contains('id', $legacyWithinWindow->id));
+        $this->assertFalse($associatedEvents->contains('id', $legacyBeforeWindow->id));
+        $this->assertFalse($associatedEvents->contains('id', $legacyOtherStudent->id));
+    }
+
+    /**
+     * 5. Secure evidence image route: authorized teacher can view; unauthorized users cannot.
+     */
+    public function test_secure_evidence_image_streaming_and_authorization(): void
+    {
+        Storage::fake('public');
+
+        $path = 'evidence/suspect_frame.jpg';
+        Storage::disk('public')->put($path, 'dummy-fake-image-data');
+
+        $attempt = ExamAttempt::create([
+            'classroom_id' => $this->classroom->id,
+            'test_id' => $this->mixedTest->id,
+            'user_id' => $this->student->id,
+            'status' => ExamAttempt::STATUS_SUBMITTED,
+            'score' => 5,
+            'total_marks' => 15,
+            'started_at' => Carbon::now()->subMinutes(30),
+            'submitted_at' => Carbon::now()->subMinutes(5),
+        ]);
+
+        $event = CheatingEvent::create([
+            'user_id' => $this->student->id,
+            'exam_attempt_id' => $attempt->id,
+            'event_type' => 'multiple_faces_detected',
+            'evidence_path' => $path,
+            'suspicion_score' => 3,
+            'occurred_at' => Carbon::now()->subMinutes(20),
+        ]);
+
+        // Teacher owner can access
+        $this->actingAs($this->teacher);
+        $response = $this->get(route('teacher.classrooms.tests.evidence.show', [
+            $this->classroom,
+            $this->mixedTest,
+            $event,
+        ]));
+        $response->assertOk();
+
+        // Other teacher receives 403
+        $this->actingAs($this->otherTeacher);
+        $unauthTeacherResponse = $this->get(route('teacher.classrooms.tests.evidence.show', [
+            $this->classroom,
+            $this->mixedTest,
+            $event,
+        ]));
+        $unauthTeacherResponse->assertForbidden();
+
+        // Student receives 403
+        $this->actingAs($this->student);
+        $studentResponse = $this->get(route('teacher.classrooms.tests.evidence.show', [
+            $this->classroom,
+            $this->mixedTest,
+            $event,
+        ]));
+        $studentResponse->assertForbidden();
+    }
+
+    /**
+     * 6. Student submits mixed exam: MCQ auto-grades, written answer persists without loss, status is ungraded.
+     */
+    public function test_mcq_auto_grading_and_written_answer_persistence_on_submission(): void
+    {
+        $this->actingAs($this->student);
+
+        // Student starts exam
+        $this->get(route('student.classrooms.tests.take', [$this->classroom, $this->mixedTest]));
+
+        $attempt = ExamAttempt::where('classroom_id', $this->classroom->id)
+            ->where('test_id', $this->mixedTest->id)
+            ->where('user_id', $this->student->id)
+            ->firstOrFail();
+
+        // Student auto-saves written answer
+        $this->postJson(route('student.classrooms.tests.save-answer', [$this->classroom, $this->mixedTest]), [
+            'question_id' => $this->textQuestion->id,
+            'text_answer' => 'Shannon entropy measures the uncertainty or information content in a message: H(X) = -sum(p(x) log2 p(x)).',
+        ])->assertOk();
+
+        // Student submits the exam with MCQ choice and written answer
+        $submitResponse = $this->post(route('student.classrooms.tests.submit', [$this->classroom, $this->mixedTest]), [
+            'answers' => [
+                $this->mcqQuestion->id => $this->correctOption->id, // Correct -> 5 marks
+                $this->textQuestion->id => 'Shannon entropy measures the uncertainty or information content in a message: H(X) = -sum(p(x) log2 p(x)). In cryptography, high entropy ensures ciphertexts are indistinguishable from random noise.',
+            ],
+        ]);
+
+        $submitResponse->assertRedirect(route('student.classrooms.tests.show', [$this->classroom, $this->mixedTest]));
+
+        $attempt->refresh();
+
+        // Attempt score equals auto-graded MCQ score (5 marks)
+        $this->assertEquals(5, $attempt->score);
+        $this->assertEquals(15, $attempt->total_marks);
+        $this->assertEquals(ExamAttempt::STATUS_SUBMITTED, $attempt->status);
+        $this->assertFalse($attempt->isFullyGraded());
+        $this->assertTrue($attempt->isUngraded());
+        $this->assertEquals('ungraded', $attempt->gradingStatus());
+
+        // Check MCQ answer
+        $mcqAnswer = StudentAnswer::where('exam_attempt_id', $attempt->id)
+            ->where('question_id', $this->mcqQuestion->id)
+            ->firstOrFail();
+        $this->assertTrue($mcqAnswer->is_correct);
+        $this->assertEquals(5, $mcqAnswer->marks_awarded);
+        $this->assertTrue($mcqAnswer->is_graded);
+
+        // Check Written answer persisted
+        $textAnswer = StudentAnswer::where('exam_attempt_id', $attempt->id)
+            ->where('question_id', $this->textQuestion->id)
+            ->firstOrFail();
+        $this->assertStringContainsString('Shannon entropy measures the uncertainty', $textAnswer->text_answer);
+        $this->assertFalse($textAnswer->is_graded);
+        $this->assertEquals(0, $textAnswer->marks_awarded);
+    }
+
+    /**
+     * 7. Student cannot alter answers or marks post-submission.
+     */
+    public function test_student_cannot_alter_answers_post_submission(): void
+    {
+        $attempt = ExamAttempt::create([
+            'classroom_id' => $this->classroom->id,
+            'test_id' => $this->mixedTest->id,
+            'user_id' => $this->student->id,
+            'status' => ExamAttempt::STATUS_SUBMITTED,
+            'score' => 5,
+            'total_marks' => 15,
+            'started_at' => Carbon::now()->subMinutes(30),
+            'submitted_at' => Carbon::now()->subMinutes(5),
+        ]);
+
+        $this->actingAs($this->student);
+
+        $response = $this->postJson(route('student.classrooms.tests.save-answer', [$this->classroom, $this->mixedTest]), [
+            'question_id' => $this->textQuestion->id,
+            'text_answer' => 'Attempting post-submission cheat.',
+        ]);
+
+        $response->assertStatus(403);
+    }
+
+    /**
+     * 8. Teacher grades written answer, server validates marks, recalculates total score, and updates status.
+     */
+    public function test_teacher_can_grade_written_answer_and_score_recalculates(): void
+    {
+        $attempt = ExamAttempt::create([
+            'classroom_id' => $this->classroom->id,
+            'test_id' => $this->mixedTest->id,
+            'user_id' => $this->student->id,
+            'status' => ExamAttempt::STATUS_SUBMITTED,
+            'score' => 5,
+            'total_marks' => 15,
+            'started_at' => Carbon::now()->subMinutes(40),
+            'submitted_at' => Carbon::now()->subMinutes(10),
+        ]);
+
+        StudentAnswer::create([
+            'exam_attempt_id' => $attempt->id,
+            'question_id' => $this->mcqQuestion->id,
+            'selected_option_id' => $this->correctOption->id,
+            'is_correct' => true,
+            'marks_awarded' => 5,
+            'is_graded' => true,
+        ]);
+
+        StudentAnswer::create([
+            'exam_attempt_id' => $attempt->id,
+            'question_id' => $this->textQuestion->id,
+            'text_answer' => 'Comprehensive entropy explanation.',
+            'marks_awarded' => 0,
+            'is_graded' => false,
+        ]);
+
+        $this->actingAs($this->teacher);
+
+        // Teacher awards 9 marks out of 10 for the written question with feedback
+        $saveGradeResponse = $this->post(route('teacher.classrooms.tests.attempts.save-grades', [
+            $this->classroom,
+            $this->mixedTest,
+            $attempt,
+        ]), [
+            'marks' => [
+                $this->textQuestion->id => 9,
+            ],
+            'feedback' => [
+                $this->textQuestion->id => 'Excellent mathematical derivation and clear cryptographic context.',
+            ],
+            'overall_feedback' => 'Outstanding performance across both objective and subjective sections.',
+        ]);
+
+        $saveGradeResponse->assertRedirect(route('teacher.classrooms.tests.results', [
+            $this->classroom,
+            $this->mixedTest,
+            'tab' => 'on_time',
+        ]));
+        $saveGradeResponse->assertSessionHas('success');
+
+        $attempt->refresh();
+
+        // Total score = 5 (MCQ) + 9 (Faculty awarded written) = 14
+        $this->assertEquals(14, $attempt->score);
+        $this->assertEquals(ExamAttempt::STATUS_GRADED, $attempt->status);
+        $this->assertTrue($attempt->isFullyGraded());
+        $this->assertEquals('fully_graded', $attempt->gradingStatus());
+        $this->assertNotNull($attempt->graded_at);
+        $this->assertEquals('Outstanding performance across both objective and subjective sections.', $attempt->teacher_feedback);
+
+        $gradedTextAnswer = StudentAnswer::where('exam_attempt_id', $attempt->id)
+            ->where('question_id', $this->textQuestion->id)
+            ->firstOrFail();
+
+        $this->assertEquals(9, $gradedTextAnswer->marks_awarded);
+        $this->assertTrue($gradedTextAnswer->is_graded);
+        $this->assertEquals('Excellent mathematical derivation and clear cryptographic context.', $gradedTextAnswer->teacher_feedback);
+    }
+
+    /**
+     * 9. Server validation rejects marks exceeding max marks or negative marks.
+     */
+    public function test_teacher_grade_submission_validates_marks_range(): void
+    {
+        $attempt = ExamAttempt::create([
+            'classroom_id' => $this->classroom->id,
+            'test_id' => $this->mixedTest->id,
+            'user_id' => $this->student->id,
+            'status' => ExamAttempt::STATUS_SUBMITTED,
+            'score' => 5,
+            'total_marks' => 15,
+            'started_at' => Carbon::now()->subMinutes(40),
+            'submitted_at' => Carbon::now()->subMinutes(10),
+        ]);
+
+        StudentAnswer::create([
+            'exam_attempt_id' => $attempt->id,
+            'question_id' => $this->textQuestion->id,
+            'text_answer' => 'Answer text',
+            'marks_awarded' => 0,
+            'is_graded' => false,
+        ]);
+
+        $this->actingAs($this->teacher);
+
+        // Marks exceed question max (10.5 > 10)
+        $excessDecimalResponse = $this->post(route('teacher.classrooms.tests.attempts.save-grades', [
+            $this->classroom,
+            $this->mixedTest,
+            $attempt,
+        ]), [
+            'marks' => [
+                $this->textQuestion->id => 10.5,
+            ],
+        ]);
+        $excessDecimalResponse->assertSessionHasErrors(["marks.{$this->textQuestion->id}"]);
+
+        // Marks exceed question max (15 > 10)
+        $excessResponse = $this->post(route('teacher.classrooms.tests.attempts.save-grades', [
+            $this->classroom,
+            $this->mixedTest,
+            $attempt,
+        ]), [
+            'marks' => [
+                $this->textQuestion->id => 15,
+            ],
+        ]);
+        $excessResponse->assertSessionHasErrors(["marks.{$this->textQuestion->id}"]);
+
+        // Negative decimal marks (< 0)
+        $negativeDecimalResponse = $this->post(route('teacher.classrooms.tests.attempts.save-grades', [
+            $this->classroom,
+            $this->mixedTest,
+            $attempt,
+        ]), [
+            'marks' => [
+                $this->textQuestion->id => -0.5,
+            ],
+        ]);
+        $negativeDecimalResponse->assertSessionHasErrors(["marks.{$this->textQuestion->id}"]);
+
+        // Negative marks (< 0)
+        $negativeResponse = $this->post(route('teacher.classrooms.tests.attempts.save-grades', [
+            $this->classroom,
+            $this->mixedTest,
+            $attempt,
+        ]), [
+            'marks' => [
+                $this->textQuestion->id => -2,
+            ],
+        ]);
+        $negativeResponse->assertSessionHasErrors(["marks.{$this->textQuestion->id}"]);
+    }
+
+    /**
+     * 10. Teacher can award decimal/floating-point marks (e.g. 2.5, 8.5) and total score retains decimals.
+     */
+    public function test_teacher_can_award_decimal_marks_and_total_score_preserves_decimals(): void
+    {
+        $attempt = ExamAttempt::create([
+            'classroom_id' => $this->classroom->id,
+            'test_id' => $this->mixedTest->id,
+            'user_id' => $this->student->id,
+            'status' => ExamAttempt::STATUS_SUBMITTED,
+            'score' => 5.0,
+            'total_marks' => 15.0,
+            'started_at' => Carbon::now()->subMinutes(40),
+            'submitted_at' => Carbon::now()->subMinutes(10),
+        ]);
+
+        StudentAnswer::create([
+            'exam_attempt_id' => $attempt->id,
+            'question_id' => $this->mcqQuestion->id,
+            'selected_option_id' => $this->correctOption->id,
+            'is_correct' => true,
+            'marks_awarded' => 5.0,
+            'is_graded' => true,
+        ]);
+
+        StudentAnswer::create([
+            'exam_attempt_id' => $attempt->id,
+            'question_id' => $this->textQuestion->id,
+            'text_answer' => 'Answer with partial credit awarded.',
+            'marks_awarded' => 0.0,
+            'is_graded' => false,
+        ]);
+
+        $this->actingAs($this->teacher);
+
+        // Verify grading blade view includes step="any" and type="number"
+        $viewResponse = $this->get(route('teacher.classrooms.tests.attempts.grade', [
+            $this->classroom,
+            $this->mixedTest,
+            $attempt,
+        ]));
+        $viewResponse->assertOk();
+        $viewResponse->assertSee('step="any"', false);
+        $viewResponse->assertSee('type="number"', false);
+
+        // Teacher awards 8.5 marks for written question
+        $response = $this->post(route('teacher.classrooms.tests.attempts.save-grades', [
+            $this->classroom,
+            $this->mixedTest,
+            $attempt,
+        ]), [
+            'marks' => [
+                $this->textQuestion->id => 8.5,
+            ],
+            'feedback' => [
+                $this->textQuestion->id => 'Good points, awarded 8.5/10 marks.',
+            ],
+            'overall_feedback' => 'Final grade with decimal score.',
+        ]);
+
+        $response->assertRedirect(route('teacher.classrooms.tests.results', [
+            $this->classroom,
+            $this->mixedTest,
+            'tab' => 'on_time',
+        ]));
+        $response->assertSessionHasNoErrors();
+
+        $attempt->refresh();
+
+        // Total score = 5.0 (MCQ) + 8.5 (written) = 13.5
+        $this->assertEquals(13.5, $attempt->score);
+        $this->assertEquals(ExamAttempt::STATUS_GRADED, $attempt->status);
+        $this->assertTrue($attempt->isFullyGraded());
+
+        $textAnswer = StudentAnswer::where('exam_attempt_id', $attempt->id)
+            ->where('question_id', $this->textQuestion->id)
+            ->firstOrFail();
+
+        $this->assertEquals(8.5, $textAnswer->marks_awarded);
+        $this->assertTrue($textAnswer->is_graded);
+        $this->assertEquals('Good points, awarded 8.5/10 marks.', $textAnswer->teacher_feedback);
+
+        // Verify that updating to 2.5 marks also works and recalculates total to 7.5
+        $updateResponse = $this->post(route('teacher.classrooms.tests.attempts.save-grades', [
+            $this->classroom,
+            $this->mixedTest,
+            $attempt,
+        ]), [
+            'marks' => [
+                $this->textQuestion->id => 2.5,
+            ],
+        ]);
+
+        $updateResponse->assertSessionHasNoErrors();
+        $attempt->refresh();
+        $textAnswer->refresh();
+
+        $this->assertEquals(2.5, $textAnswer->marks_awarded);
+        $this->assertEquals(7.5, $attempt->score);
+    }
+
+    /**
+     * 10. Student view displays 'Grading in Progress' until fully graded, and then displays verified score & feedback.
+     */
+    public function test_student_sees_grading_in_progress_until_fully_graded(): void
+    {
+        $attempt = ExamAttempt::create([
+            'classroom_id' => $this->classroom->id,
+            'test_id' => $this->mixedTest->id,
+            'user_id' => $this->student->id,
+            'status' => ExamAttempt::STATUS_SUBMITTED,
+            'score' => 5,
+            'total_marks' => 15,
+            'started_at' => Carbon::now()->subMinutes(30),
+            'submitted_at' => Carbon::now()->subMinutes(5),
+        ]);
+
+        StudentAnswer::create([
+            'exam_attempt_id' => $attempt->id,
+            'question_id' => $this->mcqQuestion->id,
+            'selected_option_id' => $this->correctOption->id,
+            'is_correct' => true,
+            'marks_awarded' => 5,
+            'is_graded' => true,
+        ]);
+
+        StudentAnswer::create([
+            'exam_attempt_id' => $attempt->id,
+            'question_id' => $this->textQuestion->id,
+            'text_answer' => 'Student response awaiting review.',
+            'marks_awarded' => 0,
+            'is_graded' => false,
+        ]);
+
+        $this->actingAs($this->student);
+
+        // Student views overview while written question is pending
+        $pendingView = $this->get(route('student.classrooms.tests.show', [$this->classroom, $this->mixedTest]));
+        $pendingView->assertOk();
+        $pendingView->assertSee('Grading in Progress');
+        $pendingView->assertSee('Written Answers Awaiting Instructor Review');
+        $pendingView->assertDontSee('Final Score:');
+
+        // Teacher grades the attempt
+        $attempt->update([
+            'status' => ExamAttempt::STATUS_GRADED,
+            'score' => 13,
+            'graded_at' => now(),
+            'teacher_feedback' => 'Commendable effort.',
+        ]);
+
+        StudentAnswer::where('exam_attempt_id', $attempt->id)
+            ->where('question_id', $this->textQuestion->id)
+            ->update([
+                'marks_awarded' => 8,
+                'is_graded' => true,
+            ]);
+
+        // Student views overview after fully graded
+        $gradedView = $this->get(route('student.classrooms.tests.show', [$this->classroom, $this->mixedTest]));
+        $gradedView->assertOk();
+        $gradedView->assertSee('Fully Graded');
+        $gradedView->assertSee('Final Score: 13 / 15 Marks');
+        $gradedView->assertSee('Commendable effort.');
+    }
+
+    /**
+     * 12. Teacher grading view includes mouse-wheel prevention attributes and scoped script on marks inputs.
+     */
+    public function test_teacher_grading_view_has_wheel_prevention_on_marks_input_and_script(): void
+    {
+        $attempt = ExamAttempt::create([
+            'classroom_id' => $this->classroom->id,
+            'test_id' => $this->mixedTest->id,
+            'user_id' => $this->student->id,
+            'status' => ExamAttempt::STATUS_SUBMITTED,
+            'score' => 5,
+            'total_marks' => 15,
+            'started_at' => now()->subMinutes(30),
+            'submitted_at' => now()->subMinutes(5),
+        ]);
+
+        StudentAnswer::create([
+            'exam_attempt_id' => $attempt->id,
+            'question_id' => $this->textQuestion->id,
+            'text_answer' => 'Sample student answer.',
+            'marks_awarded' => 0,
+            'is_graded' => false,
+        ]);
+
+        $this->actingAs($this->teacher);
+
+        $response = $this->get(route('teacher.classrooms.tests.attempts.grade', [$this->classroom, $this->mixedTest, $attempt]));
+        $response->assertOk();
+        $response->assertSee('onwheel="this.blur(); event.preventDefault();"', false);
+        $response->assertSee('marks-input');
+        $response->assertSee('step="any"', false);
+        $response->assertSee('type="number"', false);
+        $response->assertSee('input.addEventListener(\'wheel\'', false);
+        $response->assertSee('id="negative_marks"', false);
+        $response->assertSee('input[name="negative_marks"]', false);
+    }
+
+    /**
+     * 13. Proctoring screenshot policy: tab-switch and fullscreen events do not have evidence screenshots.
+     */
+    public function test_proctoring_screenshot_policy_for_tab_and_fullscreen_events(): void
+    {
+        $attempt = ExamAttempt::create([
+            'classroom_id' => $this->classroom->id,
+            'test_id' => $this->mixedTest->id,
+            'user_id' => $this->student->id,
+            'status' => ExamAttempt::STATUS_IN_PROGRESS,
+            'score' => 0,
+            'total_marks' => 15,
+            'started_at' => now(),
+        ]);
+
+        $this->actingAs($this->student);
+
+        // Tab switch event (no evidence file attached)
+        $tabResponse = $this->postJson(route('cheating-event.store'), [
+            'event_type' => 'tab_switch',
+            'exam_attempt_id' => $attempt->id,
+        ]);
+
+        $tabResponse->assertOk()
+            ->assertJson([
+                'success' => true,
+                'evidence_path' => null,
+            ]);
+
+        $this->assertDatabaseHas('cheating_events', [
+            'user_id' => $this->student->id,
+            'exam_attempt_id' => $attempt->id,
+            'event_type' => 'tab_switch',
+            'suspicion_score' => 1,
+            'evidence_path' => null,
+        ]);
+
+        // Fullscreen exit event (no evidence file attached)
+        $fsResponse = $this->postJson(route('cheating-event.store'), [
+            'event_type' => 'fullscreen_exit',
+            'exam_attempt_id' => $attempt->id,
+        ]);
+
+        $fsResponse->assertOk()
+            ->assertJson([
+                'success' => true,
+                'evidence_path' => null,
+            ]);
+
+        $this->assertDatabaseHas('cheating_events', [
+            'user_id' => $this->student->id,
+            'exam_attempt_id' => $attempt->id,
+            'event_type' => 'fullscreen_exit',
+            'suspicion_score' => 5,
+            'evidence_path' => null,
+        ]);
+    }
+
+    /**
+     * 14. Face-related anomalies (no_face_detected, multiple_faces_detected, abnormal_eye_movement) attach webcam evidence.
+     */
+    public function test_proctoring_face_related_events_store_evidence_screenshots(): void
+    {
+        Storage::fake('public');
+
+        $attempt = ExamAttempt::create([
+            'classroom_id' => $this->classroom->id,
+            'test_id' => $this->mixedTest->id,
+            'user_id' => $this->student->id,
+            'status' => ExamAttempt::STATUS_IN_PROGRESS,
+            'score' => 0,
+            'total_marks' => 15,
+            'started_at' => now(),
+        ]);
+
+        $this->actingAs($this->student);
+
+        // 1. Abnormal eye movement with webcam evidence
+        $gazeImage = UploadedFile::fake()->create('gaze_deviation.jpg', 50, 'image/jpeg');
+        $gazeResponse = $this->post(route('cheating-event.store'), [
+            'event_type' => 'abnormal_eye_movement',
+            'exam_attempt_id' => $attempt->id,
+            'evidence' => $gazeImage,
+        ], ['Accept' => 'application/json']);
+
+        $gazeResponse->assertOk()->assertJson(['success' => true]);
+        $gazeData = $gazeResponse->json();
+        $this->assertNotNull($gazeData['evidence_path']);
+        Storage::disk('public')->assertExists($gazeData['evidence_path']);
+
+        $this->assertDatabaseHas('cheating_events', [
+            'user_id' => $this->student->id,
+            'exam_attempt_id' => $attempt->id,
+            'event_type' => 'abnormal_eye_movement',
+            'suspicion_score' => 1,
+            'evidence_path' => $gazeData['evidence_path'],
+        ]);
+
+        // 2. No face detected with webcam evidence
+        $noFaceImage = UploadedFile::fake()->create('no_face.jpg', 50, 'image/jpeg');
+        $noFaceResponse = $this->post(route('cheating-event.store'), [
+            'event_type' => 'no_face_detected',
+            'exam_attempt_id' => $attempt->id,
+            'evidence' => $noFaceImage,
+        ], ['Accept' => 'application/json']);
+
+        $noFaceResponse->assertOk()->assertJson(['success' => true]);
+        $noFaceData = $noFaceResponse->json();
+        $this->assertNotNull($noFaceData['evidence_path']);
+        Storage::disk('public')->assertExists($noFaceData['evidence_path']);
+
+        // 3. Multiple faces detected with webcam evidence
+        $multiImage = UploadedFile::fake()->create('multiple_faces.jpg', 50, 'image/jpeg');
+        $multiResponse = $this->post(route('cheating-event.store'), [
+            'event_type' => 'multiple_faces_detected',
+            'exam_attempt_id' => $attempt->id,
+            'evidence' => $multiImage,
+        ], ['Accept' => 'application/json']);
+
+        $multiResponse->assertOk()->assertJson(['success' => true]);
+        $multiData = $multiResponse->json();
+        $this->assertNotNull($multiData['evidence_path']);
+        Storage::disk('public')->assertExists($multiData['evidence_path']);
+
+        // Verify the attempt's associated cheating events includes all 3 with evidence
+        $attempt->refresh();
+        $this->assertCount(3, $attempt->cheatingEvents);
+    }
+
+    /**
+     * 15. Student test-taking view contains copy/cut/paste blocking, independent MediaPipe init, and camera lifecycle checks.
+     */
+    public function test_student_test_taking_view_has_clipboard_blocking_and_independent_proctoring_scripts(): void
+    {
+        $this->actingAs($this->student);
+
+        $response = $this->get(route('student.classrooms.tests.take', [$this->classroom, $this->mixedTest]));
+        $response->assertOk();
+
+        // 1. Copy, cut, and paste blocking
+        $response->assertSee("document.addEventListener('copy'", false);
+        $response->assertSee("document.addEventListener('cut'", false);
+        $response->assertSee("document.addEventListener('paste'", false);
+        $response->assertSee("Copy blocked in SecureTest.", false);
+
+        // 2. Camera stream handling and live check
+        $response->assertSee('await webcam.play()', false);
+        $response->assertSee('videoTrack.onended', false);
+        $response->assertSee('isCameraStreamLive()', false);
+
+        // 3. Independent MediaPipe loops
+        $response->assertSee('startFaceDetection()', false);
+        $response->assertSee('startEyeMonitoring()', false);
+        $response->assertDontSee('while (!window.faceDetector || !window.faceLandmarker)', false);
+    }
+
+    /**
+     * 16. Results page displays submissions in a bordered table with required columns and distinct header, without Review Answers dropdown.
+     */
+    public function test_results_page_displays_bordered_table_with_required_columns(): void
+    {
+        $attempt = ExamAttempt::create([
+            'classroom_id' => $this->classroom->id,
+            'test_id' => $this->mixedTest->id,
+            'user_id' => $this->student->id,
+            'status' => ExamAttempt::STATUS_SUBMITTED,
+            'score' => 5,
+            'total_marks' => 15,
+            'started_at' => Carbon::now()->subMinutes(30),
+            'submitted_at' => Carbon::now()->subMinutes(5),
+        ]);
+
+        StudentAnswer::create([
+            'exam_attempt_id' => $attempt->id,
+            'question_id' => $this->mcqQuestion->id,
+            'selected_option_id' => $this->correctOption->id,
+            'is_correct' => true,
+            'marks_awarded' => 5,
+            'is_graded' => true,
+        ]);
+
+        StudentAnswer::create([
+            'exam_attempt_id' => $attempt->id,
+            'question_id' => $this->textQuestion->id,
+            'text_answer' => 'Sample written answer.',
+            'marks_awarded' => 0,
+            'is_graded' => false,
+        ]);
+
+        $this->actingAs($this->teacher);
+
+        $response = $this->get(route('teacher.classrooms.tests.results', [$this->classroom, $this->mixedTest]));
+        $response->assertOk();
+
+        // 1. Verify required column headers
+        $response->assertSee('Student');
+        $response->assertSee('Email');
+        $response->assertSee('Submission Status');
+        $response->assertSee('Marks / Score');
+        $response->assertSee('Submission Date &amp; Time', false);
+        $response->assertSee('Actions');
+
+        // 2. Verify border classes on table
+        $response->assertSee('border-gray-300');
+        $response->assertSee('divide-gray-300');
+
+        // 3. Verify student submission data
+        $response->assertSee('Claude Shannon');
+        $response->assertSee('shannon@securetest.local');
+        $response->assertSee('On Time');
+        $response->assertSee('Ungraded');
+        $response->assertSee('Score: 5 / 15');
+
+        // 4. Verify separate 'Review Answers' dropdown is removed
+        $response->assertDontSee('Review Answers');
+        $response->assertDontSee('Hide Answers');
+    }
+
+    /**
+     * 17. Results page displays dynamic action button: 'Review & Grade' for ungraded and 'Recheck / Edit Grade' for graded.
+     */
+    public function test_results_page_displays_dynamic_grading_button(): void
+    {
+        // Student 1: Ungraded attempt
+        $ungradedAttempt = ExamAttempt::create([
+            'classroom_id' => $this->classroom->id,
+            'test_id' => $this->mixedTest->id,
+            'user_id' => $this->student->id,
+            'status' => ExamAttempt::STATUS_SUBMITTED,
+            'score' => 5,
+            'total_marks' => 15,
+            'started_at' => Carbon::now()->subMinutes(30),
+            'submitted_at' => Carbon::now()->subMinutes(5),
+        ]);
+
+        StudentAnswer::create([
+            'exam_attempt_id' => $ungradedAttempt->id,
+            'question_id' => $this->textQuestion->id,
+            'text_answer' => 'Needs grading.',
+            'marks_awarded' => 0,
+            'is_graded' => false,
+        ]);
+
+        $this->actingAs($this->teacher);
+
+        $response1 = $this->get(route('teacher.classrooms.tests.results', [$this->classroom, $this->mixedTest]));
+        $response1->assertOk();
+        $response1->assertSee('Review &amp; Grade &rarr;', false);
+        $response1->assertDontSee('Recheck / Edit Grade');
+
+        // Grade the attempt
+        $ungradedAttempt->update([
+            'status' => ExamAttempt::STATUS_GRADED,
+            'score' => 14,
+            'graded_at' => now(),
+            'teacher_feedback' => 'Well done.',
+        ]);
+
+        StudentAnswer::where('exam_attempt_id', $ungradedAttempt->id)
+            ->where('question_id', $this->textQuestion->id)
+            ->update([
+                'marks_awarded' => 9,
+                'is_graded' => true,
+            ]);
+
+        $this->assertTrue($ungradedAttempt->fresh()->isGraded());
+
+        $response2 = $this->get(route('teacher.classrooms.tests.results', [$this->classroom, $this->mixedTest]));
+        $response2->assertOk();
+        $response2->assertSee('Recheck / Edit Grade &rarr;', false);
+    }
+
+    /**
+     * 18. Rechecking an already graded submission loads previously saved marks and feedback without erasing them.
+     */
+    public function test_rechecking_graded_attempt_loads_previously_saved_marks_and_feedback(): void
+    {
+        $attempt = ExamAttempt::create([
+            'classroom_id' => $this->classroom->id,
+            'test_id' => $this->mixedTest->id,
+            'user_id' => $this->student->id,
+            'status' => ExamAttempt::STATUS_GRADED,
+            'score' => 14,
+            'total_marks' => 15,
+            'graded_at' => now(),
+            'teacher_feedback' => 'Previous overall feedback note.',
+            'started_at' => Carbon::now()->subMinutes(30),
+            'submitted_at' => Carbon::now()->subMinutes(5),
+        ]);
+
+        StudentAnswer::create([
+            'exam_attempt_id' => $attempt->id,
+            'question_id' => $this->mcqQuestion->id,
+            'selected_option_id' => $this->correctOption->id,
+            'is_correct' => true,
+            'marks_awarded' => 5,
+            'is_graded' => true,
+        ]);
+
+        StudentAnswer::create([
+            'exam_attempt_id' => $attempt->id,
+            'question_id' => $this->textQuestion->id,
+            'text_answer' => 'Detailed response text.',
+            'marks_awarded' => 9,
+            'is_graded' => true,
+            'teacher_feedback' => 'Previous question feedback comment.',
+        ]);
+
+        $this->actingAs($this->teacher);
+
+        // View the grading page
+        $gradeView = $this->get(route('teacher.classrooms.tests.attempts.grade', [$this->classroom, $this->mixedTest, $attempt]));
+        $gradeView->assertOk();
+
+        // 1. Verify previous question marks are loaded in input value
+        $gradeView->assertSee('value="9"', false);
+
+        // 2. Verify previous question feedback is loaded in input value
+        $gradeView->assertSee('value="Previous question feedback comment."', false);
+
+        // 3. Verify previous overall feedback is loaded in textarea
+        $gradeView->assertSee('Previous overall feedback note.');
+
+        // 4. Update the grades and feedback
+        $updateResponse = $this->post(route('teacher.classrooms.tests.attempts.save-grades', [$this->classroom, $this->mixedTest, $attempt]), [
+            'marks' => [
+                $this->textQuestion->id => 10,
+            ],
+            'feedback' => [
+                $this->textQuestion->id => 'Updated feedback: Perfect answer.',
+            ],
+            'overall_feedback' => 'Updated overall feedback: 100% score.',
+        ]);
+
+        // Redirects to Results page with success flash
+        $updateResponse->assertRedirect(route('teacher.classrooms.tests.results', [$this->classroom, $this->mixedTest, 'tab' => 'on_time']));
+        $updateResponse->assertSessionHas('success');
+
+        $attempt->refresh();
+        $this->assertEquals(15, $attempt->score);
+        $this->assertEquals('Updated overall feedback: 100% score.', $attempt->teacher_feedback);
+
+        $textAnswer = StudentAnswer::where('exam_attempt_id', $attempt->id)
+            ->where('question_id', $this->textQuestion->id)
+            ->firstOrFail();
+        $this->assertEquals(10, $textAnswer->marks_awarded);
+        $this->assertEquals('Updated feedback: Perfect answer.', $textAnswer->teacher_feedback);
+    }
+
+    /**
+     * 19. In Progress and Not Started tables display relevant info without misleading marks or submission dates.
+     */
+    public function test_in_progress_and_not_started_tables_display_relevant_info(): void
+    {
+        // Enrolled student taking exam (In Progress)
+        $inProgressAttempt = ExamAttempt::create([
+            'classroom_id' => $this->classroom->id,
+            'test_id' => $this->mixedTest->id,
+            'user_id' => $this->student->id,
+            'status' => ExamAttempt::STATUS_IN_PROGRESS,
+            'started_at' => Carbon::now()->subMinutes(12),
+            'submitted_at' => null,
+            'score' => 0,
+            'total_marks' => 15,
+        ]);
+
+        // Second enrolled student who has not started
+        $unattemptedStudent = User::create([
+            'name' => 'Ada Lovelace',
+            'email' => 'lovelace@securetest.local',
+            'password' => bcrypt('password123'),
+            'role' => User::ROLE_STUDENT,
+            'email_verified_at' => now(),
+        ]);
+        $this->classroom->students()->attach($unattemptedStudent->id);
+
+        $this->actingAs($this->teacher);
+
+        $response = $this->get(route('teacher.classrooms.tests.results', [$this->classroom, $this->mixedTest]));
+        $response->assertOk();
+
+        // In Progress section
+        $response->assertSee('Taking Exam Now');
+        $response->assertSee('Exam Status');
+        $response->assertSee('Started At');
+
+        // Not Started section
+        $response->assertSee('Ada Lovelace');
+        $response->assertSee('lovelace@securetest.local');
+        $response->assertSee('Pending Submission');
+    }
+
+    /**
+     * 20. Student can log new gaze away and eye detection events with correct default suspicion scores and evidence.
+     */
+    public function test_student_can_log_new_gaze_and_eye_detection_events_with_screenshot_and_scores(): void
+    {
+        Storage::fake('public');
+
+        $attempt = ExamAttempt::create([
+            'classroom_id' => $this->classroom->id,
+            'test_id' => $this->mixedTest->id,
+            'user_id' => $this->student->id,
+            'status' => ExamAttempt::STATUS_IN_PROGRESS,
+            'score' => 0,
+            'total_marks' => 15,
+            'started_at' => now(),
+        ]);
+
+        $this->actingAs($this->student);
+
+        $eventsToTest = [
+            'gaze_away_left' => 1,
+            'gaze_away_right' => 1,
+            'gaze_away_up' => 1,
+            'gaze_away_down' => 1,
+            'eyes_not_detected' => 2,
+            'eyes_covered_object' => 2,
+        ];
+
+        foreach ($eventsToTest as $eventType => $expectedScore) {
+            $fakeImage = UploadedFile::fake()->create("{$eventType}.jpg", 50, 'image/jpeg');
+
+            $response = $this->postJson('/cheating-event', [
+                'event_type' => $eventType,
+                'exam_attempt_id' => $attempt->id,
+                'evidence' => $fakeImage,
+            ]);
+
+            $response->assertOk()
+                ->assertJson(['success' => true]);
+
+            $this->assertDatabaseHas('cheating_events', [
+                'user_id' => $this->student->id,
+                'exam_attempt_id' => $attempt->id,
+                'event_type' => $eventType,
+                'suspicion_score' => $expectedScore,
+            ]);
+
+            $eventRecord = CheatingEvent::where('exam_attempt_id', $attempt->id)
+                ->where('event_type', $eventType)
+                ->firstOrFail();
+
+            $this->assertNotNull($eventRecord->evidence_path);
+            Storage::disk('public')->assertExists($eventRecord->evidence_path);
+        }
+    }
+
+    /**
+     * 21. Teacher grading view displays all new gaze badges, descriptions, and evidence modal links.
+     */
+    public function test_teacher_grading_view_displays_all_new_gaze_badges_and_evidence(): void
+    {
+        Storage::fake('public');
+
+        $attempt = ExamAttempt::create([
+            'classroom_id' => $this->classroom->id,
+            'test_id' => $this->mixedTest->id,
+            'user_id' => $this->student->id,
+            'status' => ExamAttempt::STATUS_SUBMITTED,
+            'score' => 5,
+            'total_marks' => 15,
+            'started_at' => now()->subMinutes(30),
+            'submitted_at' => now(),
+        ]);
+
+        $newEvents = [
+            'gaze_away_left' => 'Gaze: Looking Left',
+            'gaze_away_right' => 'Gaze: Looking Right',
+            'gaze_away_up' => 'Gaze: Looking Up',
+            'gaze_away_down' => 'Gaze: Looking Down',
+            'eyes_not_detected' => 'Eyes Undetected (Face Visible)',
+            'eyes_covered_object' => 'Both Eyes Covered by Object',
+        ];
+
+        foreach ($newEvents as $type => $label) {
+            CheatingEvent::create([
+                'user_id' => $this->student->id,
+                'exam_attempt_id' => $attempt->id,
+                'event_type' => $type,
+                'suspicion_score' => in_array($type, ['eyes_not_detected', 'eyes_covered_object']) ? 2 : 1,
+                'occurred_at' => now()->subMinutes(10),
+                'evidence_path' => 'evidence/test_' . $type . '.jpg',
+            ]);
+        }
+
+        $this->actingAs($this->teacher);
+
+        $response = $this->get(route('teacher.classrooms.tests.attempts.grade', [
+            $this->classroom,
+            $this->mixedTest,
+            $attempt,
+        ]));
+
+        $response->assertOk();
+
+        foreach ($newEvents as $label) {
+            $response->assertSee($label);
+        }
+    }
+
+    /**
+     * 22. Backward compatibility retains abnormal_eye_movement event and badge.
+     */
+    public function test_backward_compatibility_retains_abnormal_eye_movement(): void
+    {
+        $attempt = ExamAttempt::create([
+            'classroom_id' => $this->classroom->id,
+            'test_id' => $this->mixedTest->id,
+            'user_id' => $this->student->id,
+            'status' => ExamAttempt::STATUS_SUBMITTED,
+            'score' => 5,
+            'total_marks' => 15,
+            'started_at' => now()->subMinutes(30),
+            'submitted_at' => now(),
+        ]);
+
+        $this->actingAs($this->student);
+        $response = $this->postJson('/cheating-event', [
+            'event_type' => 'abnormal_eye_movement',
+            'exam_attempt_id' => $attempt->id,
+        ]);
+
+        $response->assertOk();
+        $this->assertDatabaseHas('cheating_events', [
+            'exam_attempt_id' => $attempt->id,
+            'event_type' => 'abnormal_eye_movement',
+            'suspicion_score' => 1,
+        ]);
+
+        $this->actingAs($this->teacher);
+        $gradeResponse = $this->get(route('teacher.classrooms.tests.attempts.grade', [
+            $this->classroom,
+            $this->mixedTest,
+            $attempt,
+        ]));
+
+        $gradeResponse->assertOk();
+        $gradeResponse->assertSee('Gaze / Eye Movement');
+    }
+
+    /**
+     * 23. Shared screenshot quota: Maximum 6 evidence screenshots stored per attempt.
+     * Subsequent requests record the event and suspicion score, but reject/omit evidence.
+     */
+    public function test_screenshot_quota_enforced_at_maximum_of_six_per_attempt(): void
+    {
+        Storage::fake('public');
+
+        $attempt = ExamAttempt::create([
+            'classroom_id' => $this->classroom->id,
+            'test_id' => $this->mixedTest->id,
+            'user_id' => $this->student->id,
+            'status' => ExamAttempt::STATUS_SUBMITTED,
+            'score' => 5,
+            'total_marks' => 15,
+            'started_at' => now()->subMinutes(30),
+            'submitted_at' => now(),
+        ]);
+
+        $this->actingAs($this->student);
+
+        // Send 6 visual requests with evidence file
+        for ($i = 1; $i <= 6; $i++) {
+            $file = UploadedFile::fake()->create("evidence_{$i}.jpg", 50, 'image/jpeg');
+            $response = $this->post('/cheating-event', [
+                'event_type' => 'no_face_detected',
+                'exam_attempt_id' => $attempt->id,
+                'evidence' => $file,
+            ], ['Accept' => 'application/json']);
+
+            $response->assertOk();
+            $data = $response->json();
+            $this->assertEquals($i, $data['screenshot_count']);
+            $this->assertEquals($i >= 6, $data['screenshot_quota_exhausted']);
+        }
+
+        // Verify exactly 6 evidence screenshots are stored for this attempt
+        $storedScreenshots = CheatingEvent::where('exam_attempt_id', $attempt->id)
+            ->whereNotNull('evidence_path')
+            ->count();
+        $this->assertEquals(6, $storedScreenshots);
+
+        // 7th request with evidence file: must be created without evidence
+        $seventhFile = UploadedFile::fake()->create("evidence_7.jpg", 50, 'image/jpeg');
+        $seventhResponse = $this->post('/cheating-event', [
+            'event_type' => 'multiple_faces_detected',
+            'exam_attempt_id' => $attempt->id,
+            'evidence' => $seventhFile,
+        ], ['Accept' => 'application/json']);
+
+        $seventhResponse->assertOk();
+        $seventhData = $seventhResponse->json();
+        $this->assertEquals(6, $seventhData['screenshot_count']);
+        $this->assertTrue($seventhData['screenshot_quota_exhausted']);
+
+        // Check DB: 7 events exist in total, but still exactly 6 have evidence_path
+        $this->assertEquals(7, CheatingEvent::where('exam_attempt_id', $attempt->id)->count());
+        $this->assertEquals(6, CheatingEvent::where('exam_attempt_id', $attempt->id)->whereNotNull('evidence_path')->count());
+
+        $seventhEvent = CheatingEvent::where('exam_attempt_id', $attempt->id)
+            ->where('event_type', 'multiple_faces_detected')
+            ->latest('id')
+            ->first();
+        $this->assertNotNull($seventhEvent);
+        $this->assertNull($seventhEvent->evidence_path);
+        $this->assertEquals(3, $seventhEvent->suspicion_score);
+    }
+
+    /**
+     * 24. Cheating events and suspicion scores continue recording after quota is exhausted.
+     */
+    public function test_events_continue_recording_and_scoring_after_screenshot_quota_exhausted(): void
+    {
+        Storage::fake('public');
+
+        $attempt = ExamAttempt::create([
+            'classroom_id' => $this->classroom->id,
+            'test_id' => $this->mixedTest->id,
+            'user_id' => $this->student->id,
+            'status' => ExamAttempt::STATUS_SUBMITTED,
+            'score' => 5,
+            'total_marks' => 15,
+            'started_at' => now()->subMinutes(30),
+            'submitted_at' => now(),
+        ]);
+
+        $this->actingAs($this->student);
+
+        // Create 6 events with evidence (6 * 2 = 12 score)
+        for ($i = 1; $i <= 6; $i++) {
+            $file = UploadedFile::fake()->create("evidence_{$i}.jpg", 50, 'image/jpeg');
+            $this->post('/cheating-event', [
+                'event_type' => 'no_face_detected',
+                'exam_attempt_id' => $attempt->id,
+                'evidence' => $file,
+            ], ['Accept' => 'application/json']);
+        }
+
+        // Send 7th event: gaze_away_left (visual, no file, quota exhausted, +1 score)
+        $gazeResponse = $this->postJson('/cheating-event', [
+            'event_type' => 'gaze_away_left',
+            'exam_attempt_id' => $attempt->id,
+        ]);
+        $gazeResponse->assertOk();
+        $gazeData = $gazeResponse->json();
+        $this->assertTrue($gazeData['screenshot_quota_exhausted']);
+        $this->assertEquals(6, $gazeData['screenshot_count']);
+
+        // Send 8th event: tab_switch (non-visual, +1 score)
+        $tabResponse = $this->postJson('/cheating-event', [
+            'event_type' => 'tab_switch',
+            'exam_attempt_id' => $attempt->id,
+        ]);
+        $tabResponse->assertOk();
+
+        // Verify total score includes all 8 events (6 * 2 + 1 + 1 = 14)
+        $totalScore = CheatingEvent::where('exam_attempt_id', $attempt->id)->sum('suspicion_score');
+        $this->assertEquals(14, $totalScore);
+        $this->assertEquals(8, CheatingEvent::where('exam_attempt_id', $attempt->id)->count());
+    }
+
+    /**
+     * 25. Teacher audit view displays summary metrics and Quota Exhausted indicators.
+     */
+    public function test_teacher_audit_view_displays_summary_metrics_and_quota_exhausted_indicator(): void
+    {
+        Storage::fake('public');
+
+        $attempt = ExamAttempt::create([
+            'classroom_id' => $this->classroom->id,
+            'test_id' => $this->mixedTest->id,
+            'user_id' => $this->student->id,
+            'status' => ExamAttempt::STATUS_SUBMITTED,
+            'score' => 5,
+            'total_marks' => 15,
+            'started_at' => now()->subMinutes(30),
+            'submitted_at' => now(),
+        ]);
+
+        // 2 tab switches
+        CheatingEvent::create([
+            'user_id' => $this->student->id,
+            'exam_attempt_id' => $attempt->id,
+            'event_type' => 'tab_switch',
+            'suspicion_score' => 2,
+            'occurred_at' => now()->subMinutes(25),
+        ]);
+        CheatingEvent::create([
+            'user_id' => $this->student->id,
+            'exam_attempt_id' => $attempt->id,
+            'event_type' => 'tab_switch',
+            'suspicion_score' => 2,
+            'occurred_at' => now()->subMinutes(20),
+        ]);
+
+        // 1 fullscreen exit
+        CheatingEvent::create([
+            'user_id' => $this->student->id,
+            'exam_attempt_id' => $attempt->id,
+            'event_type' => 'fullscreen_exit',
+            'suspicion_score' => 5,
+            'occurred_at' => now()->subMinutes(18),
+        ]);
+
+        // 6 screenshots
+        for ($i = 1; $i <= 6; $i++) {
+            CheatingEvent::create([
+                'user_id' => $this->student->id,
+                'exam_attempt_id' => $attempt->id,
+                'event_type' => 'no_face_detected',
+                'suspicion_score' => 2,
+                'occurred_at' => now()->subMinutes(15 - $i),
+                'evidence_path' => "evidence/test_{$i}.jpg",
+            ]);
+        }
+
+        // 1 visual event without screenshot (quota exhausted)
+        CheatingEvent::create([
+            'user_id' => $this->student->id,
+            'exam_attempt_id' => $attempt->id,
+            'event_type' => 'multiple_faces_detected',
+            'suspicion_score' => 2,
+            'occurred_at' => now()->subMinutes(5),
+            'evidence_path' => null,
+        ]);
+
+        $this->actingAs($this->teacher);
+
+        $response = $this->get(route('teacher.classrooms.tests.attempts.grade', [
+            $this->classroom,
+            $this->mixedTest,
+            $attempt,
+        ]));
+
+        $response->assertOk();
+        // Check summary metric cards
+        $response->assertSee('Total Events');
+        $response->assertSee('Tab Switches');
+        $response->assertSee('Fullscreen Exits');
+        $response->assertSee('Screenshots Captured');
+        $response->assertSee('6 / 6');
+        $response->assertSee('Limit Reached');
+
+        // Check table badges
+        $response->assertSee('Non-Visual Event');
+        $response->assertSee('Quota Exhausted (6/6 Limit)');
+    }
+
+    /**
+     * 26. Start Proctored Examination button and proctoring tracker script integrity.
+     */
+    public function test_start_proctored_examination_button_and_tracker_script_integrity(): void
+    {
+        $this->actingAs($this->student);
+
+        $response = $this->get(route('student.classrooms.tests.take', [$this->classroom, $this->mixedTest]));
+        $response->assertOk();
+
+        // 1. Verify start overlay and Start Proctored Examination button exist
+        $response->assertSee('id="startOverlay"', false);
+        $response->assertSee('id="btnBeginExam"', false);
+        $response->assertSee('Start Proctored Examination', false);
+
+        // 2. Verify no undeclared fallback identifier that throws ReferenceError
+        $response->assertDontSee('window.EyeGazeTracker || EyeGazeTracker', false);
+
+        // 3. Verify getEyeGazeTracker safe accessor is defined
+        $response->assertSee('function getEyeGazeTracker()', false);
+
+        // 4. Verify waitForProctoringReady pre-flight gate is present
+        $response->assertSee('waitForProctoringReady', false);
+        $response->assertSee('btnBeginExam.addEventListener', false);
+
+        // 5. Verify test.blade.php integrity as well
+        $testBlade = file_get_contents(resource_path('views/test.blade.php'));
+        $this->assertStringNotContainsString("asset('js/proctoring_tracker.js')", $testBlade);
+        $this->assertStringNotContainsString('window.EyeGazeTracker || EyeGazeTracker', $testBlade);
+        $this->assertStringContainsString('function getEyeGazeTracker()', $testBlade);
+    }
+}
+
+
